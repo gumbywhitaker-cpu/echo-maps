@@ -1,3 +1,6 @@
+// EchoBountyTeams 1.3.0 (Nick, 31 Oct): a raid takes HALF. Every clan starts the month on $50. Each time a clan's TC is
+//   destroyed in bounty hours the raiding clan takes money: the 1st loss takes HALF the defender's money, the 2nd loss takes
+//   EVERYTHING left - lose 2 raids and you're out. Winning a raid (e.g. raiding back) clears your strikes.
 // EchoBountyTeams 1.2.1: no duplicate markers. The map already marks every clan base (EchoStaffMap in EchoTweaks,
 //   "[TAG] $50 BOUNTY K13"); this plugin now writes each clan's live money into that label through EchoBountyPrices
 //   instead of spawning its own markers. A clan's money = its own $50 (until someone takes it) + what it has won.
@@ -26,7 +29,7 @@ using Oxide.Game.Rust.Cui;
 
 namespace Oxide.Plugins
 {
-    [Info("EchoBountyTeams", "Echo 10X", "1.2.1")]
+    [Info("EchoBountyTeams", "Echo 10X", "1.3.0")]
     [Description("Automatic bounty teams: top 10 clans with 10+ players, locked each bounty window, base markers and a raid log.")]
     public class EchoBountyTeams : RustPlugin
     {
@@ -54,14 +57,18 @@ namespace Oxide.Plugins
             public string Month = "";
             public Dictionary<string, int> Money = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             public List<Claim> Claims = new List<Claim>();                       // this wipe's claims (reset on wipe)
-            public List<string> Claimed = new List<string>();                    // clans whose $50 was taken this wipe
+            public List<string> Claimed = new List<string>();                    // (1.2.x, unused since 1.3.0)
+            public Dictionary<string, int> Losses = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);   // 1.3.0 strikes this month
             public List<string> History = new List<string>();                    // past month winners
         }
         private Bank bank;
         private void SaveBank() => Interface.Oxide.DataFileSystem.WriteObject("EchoBountyTeams_Bank", bank);
         private static string MonthNow() { var syd = DateTime.UtcNow.AddHours(11); return syd.ToString("yyyy-MM"); }
-        private int MoneyOf(string tag) { int m; return tag != null && bank.Money.TryGetValue(tag, out m) ? m : 0; }
-        private int Total(string tag) => MoneyOf(tag) + (bank.Claimed.Contains(tag, StringComparer.OrdinalIgnoreCase) ? 0 : BountyAmount);
+        // 1.3.0: Money holds each clan's whole balance; a clan with no entry yet has the starting $50
+        private int MoneyOf(string tag) { int m; return tag == null ? 0 : bank.Money.TryGetValue(tag, out m) ? m : BountyAmount; }
+        private int Total(string tag) => MoneyOf(tag);
+        private static int HalfOf(int bal) => bal <= 0 ? 0 : Math.Max(1, bal / 2);
+        private int StrikesOf(string tag) { int n; return tag != null && bank.Losses != null && bank.Losses.TryGetValue(tag, out n) ? n : 0; }
         private readonly Dictionary<string, string> pushed = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         // write every clan's money into the existing base-marker label (EchoBountyPrices -> EchoStaffMap), only when it changed
         private void SyncPrices()
@@ -81,7 +88,7 @@ namespace Oxide.Plugins
         private void AddMoney(string tag, int amt) { bank.Money[tag] = Math.Max(0, MoneyOf(tag) + amt); }
         private string BountyLabel(string tag)
         {
-            if (!bank.Claimed.Contains(tag, StringComparer.OrdinalIgnoreCase)) return "$" + BountyAmount;
+            return "$" + MoneyOf(tag) + (StrikesOf(tag) >= 1 ? " (1 loss - next raid takes all)" : " (a raid takes half)");
             var c = bank.Claims.LastOrDefault(x => x.Open && string.Equals(x.From, tag, StringComparison.OrdinalIgnoreCase));
             return c != null ? "$0 - taken by [" + c.To + "]" : "$0";
         }
@@ -92,11 +99,12 @@ namespace Oxide.Plugins
             if (!string.IsNullOrEmpty(bank.Month) && bank.Money.Count > 0)
             {
                 var top = bank.Money.Keys.Select(k => new KeyValuePair<string, int>(k, Total(k))).OrderByDescending(k => k.Value).First();
+                if (top.Value <= BountyAmount) { bank.Month = now; bank.Money.Clear(); SaveBank(); return; }   // nobody gained anything
                 var line = $"{bank.Month}: [{top.Key}] finished with ${top.Value} and can cash out (TEST - not real money)";
                 bank.History.Add(line); Log("MONTH END " + line);
                 Server.Broadcast(Tag + $"Month over! <color=#ffd27f>[{top.Key}]</color> finished with <color=#ffd27f>${top.Value}</color> and can cash out. Bounty bank reset. <size=11>({TestNote})</size>");
             }
-            bank.Month = now; bank.Money.Clear(); SaveBank();
+            bank.Month = now; bank.Money.Clear(); bank.Losses?.Clear(); SaveBank();
         }
 
         private class Hit { public string Name, Clan, Target, Grid; public int Hits, Boom; public DateTime First, Last; public bool Logged; }
@@ -183,7 +191,7 @@ namespace Oxide.Plugins
         private void Announce()
         {
             if (data.Teams.Count == 0) { Server.Broadcast(Tag + (TestAllClans ? "BOUNTY HOURS! No clan has a bounty yet - make a clan and register your base. /bountyteams" : "BOUNTY HOURS! No clan qualifies as a bounty team yet: you need 10+ players in your team and a top 10 leaderboard spot. /bountyteams")); return; }
-            Server.Broadcast(Tag + "BOUNTY HOURS! Every clan base on the map carries a <color=#ffd27f>$" + BountyAmount + " bounty</color>: destroy their TC to take it. Lost yours? Raid them back to take it back. /bountyteams <size=11>(" + TestNote + ")</size>");
+            Server.Broadcast(Tag + "BOUNTY HOURS! Every clan base on the map shows its bounty. Destroy a clan's TC and your clan takes <color=#ffd27f>half their money</color> - lose 2 raids and you're out. Got raided? Raid them back to win it back. /bountyteams <size=11>(" + TestNote + ")</size>");
         }
 
         // ---------- bases on the map ----------
@@ -243,23 +251,18 @@ namespace Oxide.Plugins
         {
             if (string.IsNullOrEmpty(winner) || string.Equals(winner, victim, StringComparison.OrdinalIgnoreCase))
             { Server.Broadcast(Tag + $"<color=#ffd27f>[{victim}]</color> just lost their TC to {who}. Only a clan can claim a bounty."); return; }
-            // raid-back: the victim took this winner's bounty earlier -> the winner takes it back
-            var back = bank.Claims.LastOrDefault(c => c.Open && string.Equals(c.From, winner, StringComparison.OrdinalIgnoreCase) && string.Equals(c.To, victim, StringComparison.OrdinalIgnoreCase));
-            if (back != null)
-            {
-                back.Open = false; AddMoney(victim, -back.Amount); AddMoney(winner, back.Amount);
-                bank.Claimed.RemoveAll(t => string.Equals(t, winner, StringComparison.OrdinalIgnoreCase));
-                SaveBank(); Log($"BOUNTY BACK: [{winner}] raided [{victim}] and took their ${back.Amount} back");
-                Server.Broadcast(Tag + $"<color=#ffd27f>[{winner}]</color> raided <color=#ffd27f>[{victim}]</color> and took their <color=#ffd27f>${back.Amount}</color> back! <size=11>({TestNote})</size>");
-                return;
-            }
-            if (bank.Claimed.Contains(victim, StringComparer.OrdinalIgnoreCase))
-            { Server.Broadcast(Tag + $"<color=#ffd27f>[{victim}]</color> lost their TC to {who}, but their bounty was already taken this wipe."); return; }
-            bank.Claimed.Add(victim);
-            bank.Claims.Add(new Claim { From = victim, To = winner, Amount = BountyAmount, At = DateTime.UtcNow.ToString("u") });
-            AddMoney(winner, BountyAmount); SaveBank();
-            Log($"BOUNTY: [{winner}] took [{victim}]'s ${BountyAmount} (bank now ${MoneyOf(winner)})");
-            Server.Broadcast(Tag + $"<color=#ffd27f>[{winner}]</color> destroyed <color=#ffd27f>[{victim}]</color>'s TC and took their <color=#ffd27f>${BountyAmount} bounty</color>! [{victim}] can raid them back to take it back. <size=11>({TestNote})</size>");
+            if (bank.Losses == null) bank.Losses = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            int strikes = StrikesOf(victim) + 1;
+            int bal = MoneyOf(victim), amt = strikes >= 2 ? bal : HalfOf(bal);
+            bank.Losses[victim] = strikes; bank.Losses[winner] = 0;   // winning a raid clears your strikes
+            if (amt <= 0) { Server.Broadcast(Tag + $"<color=#ffd27f>[{winner}]</color> raided <color=#ffd27f>[{victim}]</color>, but [{victim}] has no bounty money left."); return; }
+            bank.Money[victim] = bal - amt;
+            bank.Money[winner] = MoneyOf(winner) + amt;
+            bank.Claims.Add(new Claim { From = victim, To = winner, Amount = amt, At = DateTime.UtcNow.ToString("u"), Open = false });
+            if (bank.Claims.Count > 500) bank.Claims.RemoveRange(0, bank.Claims.Count - 500);
+            SaveBank(); pushed.Clear(); SyncPrices();
+            Log($"BOUNTY: [{winner}] raided [{victim}] and took ${amt} of ${bal} (loss {strikes}). [{winner}] ${MoneyOf(winner)}, [{victim}] ${MoneyOf(victim)}");
+            Server.Broadcast(Tag + $"<color=#ffd27f>[{winner}]</color> destroyed <color=#ffd27f>[{victim}]</color>'s TC and took <color=#ffd27f>${amt}</color>" + (strikes >= 2 ? $" - everything [{victim}] had left. [{victim}] is OUT (2 raids lost)" : $" - half their bounty. One more loss and [{victim}] is out") + $". [{winner}] now ${MoneyOf(winner)}. Raid them back to win it back. <size=11>({TestNote})</size>");
         }
 
         private void FlushHits()
@@ -362,7 +365,7 @@ namespace Oxide.Plugins
                     data.Dq[arg] = "broke server rules"; data.Teams.RemoveAll(t => string.Equals(t, arg, StringComparison.OrdinalIgnoreCase)); data.ManualTeams.RemoveAll(t => string.Equals(t, arg, StringComparison.OrdinalIgnoreCase)); Save();
                     Log($"[{arg}] DISQUALIFIED for this wipe by {who}"); Server.Broadcast(Tag + $"[{arg}] has been disqualified from the bounty system for this wipe."); if (bounty) RefreshBases(); return $"[{arg}] disqualified.";
                 case "undq": data.Dq.Remove(arg ?? ""); Save(); Log($"{who} lifted the disqualification on [{arg}]"); return $"[{arg}] can qualify again.";
-                case "bankreset": bank.Money.Clear(); bank.Claims.Clear(); bank.Claimed.Clear(); SaveBank(); Log($"{who} reset the bounty bank"); return "Bounty bank reset.";
+                case "bankreset": bank.Money.Clear(); bank.Claims.Clear(); bank.Claimed.Clear(); bank.Losses?.Clear(); SaveBank(); Log($"{who} reset the bounty bank"); return "Bounty bank reset.";
                 case "relock": Lock(); if (bounty) { RefreshBases(); Announce(); } return "Locked: " + (data.Teams.Count > 0 ? string.Join(" ", data.Teams.Select(t => "[" + t + "]")) : "none");
             }
             return "unknown action";
@@ -414,7 +417,7 @@ namespace Oxide.Plugins
             c.Add(new CuiPanel { Image = { Color = "0 0 0 0" }, RectTransform = { AnchorMin = "0.5 0.5", AnchorMax = "0.5 0.5", OffsetMin = "-500 -320", OffsetMax = "500 320" } }, UI, w);
             Pic(c, w, "window_bg_1000x640", 0, 0, 1000, 640, "0.04 0.07 0.09 0.98");
             T(c, w, "BOUNTY TEAMS", 24, White, TextAnchor.MiddleLeft, 30, 16, 500, 50, true);
-            T(c, w, "ECHO BOUNTY SYSTEM  ·  $" + BountyAmount + " per clan  ·  bank " + bank.Month + "  ·  " + TestNote, 11, Cy, TextAnchor.MiddleLeft, 30, 46, 930, 64);
+            T(c, w, "ECHO BOUNTY SYSTEM  ·  $" + BountyAmount + " start, 1st loss half, 2nd loss all  ·  bank " + bank.Month + "  ·  " + TestNote, 11, Cy, TextAnchor.MiddleLeft, 30, 46, 930, 64);
             Pic(c, w, "close_34x34", 946, 16, 980, 50, "0.6 0.15 0.15 0.9");
             c.Add(new CuiButton { Button = { Command = "bountyteams.ui close", Color = "0 0 0 0" }, Text = { Text = "" }, RectTransform = { AnchorMin = "0 1", AnchorMax = "0 1", OffsetMin = "946 -50", OffsetMax = "980 -16" } }, w);
 
