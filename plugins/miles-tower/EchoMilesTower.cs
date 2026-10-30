@@ -14,7 +14,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("EchoMilesTower", "Echo 10X", "1.0.1")]
+    [Info("EchoMilesTower", "Echo 10X", "1.0.2")]
     [Description("Miles' Lookout - a memorial lookout tower for MILES, rebuilt on every map.")]
     public class EchoMilesTower : RustPlugin
     {
@@ -45,7 +45,7 @@ namespace Oxide.Plugins
         {
             data = Interface.Oxide.DataFileSystem.ReadObject<Store>("EchoMilesTower") ?? new Store();
             Collect();
-            if (parts.Count > 0) { built = true; Puts($"Miles' Lookout is standing at {centre} ({parts.Count} pieces)."); }
+            if (parts.Count > 0) { built = true; Puts($"Miles' Lookout is standing at {centre} ({parts.Count} pieces)."); timer.Once(5f, ReapplyPlaques); }
             else timer.Once(10f, () => { var r = Build(null); Puts(r); });
             timer.Every(60f, KeepLit);
         }
@@ -162,6 +162,7 @@ namespace Oxide.Plugins
             if (mk != null) { mk.OwnerID = Marker; mk.alpha = 0.7f; mk.color1 = new Color(0.91f, 0.77f, 0.41f); mk.color2 = Color.black; mk.radius = 0.25f; mk.Spawn(); mk.SendUpdate(); parts.Add(mk); }
             KeepLit();
             built = true;
+            timer.Once(3f, ReapplyPlaques);   // 1.0.2: the old plaques' picture is deleted a moment after they go - put it back on the new ones
             data.Spots[MapKey] = new[] { centre.x, centre.y, centre.z };
             Interface.Oxide.DataFileSystem.WriteObject("EchoMilesTower", data);
             return $"Miles' Lookout built at {centre} ({why}), {parts.Count} pieces, {Levels * LevelH:0} m tall.";
@@ -180,6 +181,8 @@ namespace Oxide.Plugins
             }
             catch (Exception ex) { PrintWarning("plaque: " + ex.Message); }
         }
+
+        private void ReapplyPlaques() { Collect(); int n = 0; foreach (var e in parts.ToList()) if (e is Signage) { Plaque(e); n++; } if (n > 0) Puts($"Plaque picture set on {n} sign(s)."); }
 
         private void KeepLit()
         {
@@ -229,6 +232,7 @@ namespace Oxide.Plugins
         [ConsoleCommand("milestower.status")] private void CStatus(ConsoleSystem.Arg a) { if (!Admin(a)) return; Collect(); a.ReplyWith(parts.Count > 0 ? $"Miles' Lookout: {parts.Count} pieces at {centre} on {MapKey}" : "Miles' Lookout: not built on this map"); }
         [ConsoleCommand("milestower.build")] private void CBuild(ConsoleSystem.Arg a) { if (!Admin(a)) return; a.ReplyWith(Build(null)); }
         [ConsoleCommand("milestower.remove")] private void CRemove(ConsoleSystem.Arg a) { if (!Admin(a)) return; Remove(); data.Spots.Remove(MapKey); Interface.Oxide.DataFileSystem.WriteObject("EchoMilesTower", data); a.ReplyWith("Miles' Lookout removed from this map."); }
+        [ConsoleCommand("milestower.signs")] private void CSigns(ConsoleSystem.Arg a) { if (!Admin(a)) return; ReapplyPlaques(); a.ReplyWith("plaque picture re-sent"); }
         [ConsoleCommand("milestower.flipsigns")] private void CFlip(ConsoleSystem.Arg a) { if (!Admin(a)) return; data.SignsFlipped = !data.SignsFlipped; float[] s; var at = data.Spots.TryGetValue(MapKey, out s) ? new Vector3(s[0], s[1] - 0.3f, s[2]) : (Vector3?)null; a.ReplyWith("Plaques turned round. " + Build(at)); }
         [ChatCommand("milestower")]
         private void ChTower(BasePlayer p, string cmd, string[] args)
