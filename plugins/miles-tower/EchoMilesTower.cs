@@ -175,7 +175,7 @@ namespace Oxide.Plugins
                 var bytes = Convert.FromBase64String(PlaqueB64);
                 if (s.textureIDs == null || s.textureIDs.Length == 0) return;
                 s.textureIDs[0] = FileStorage.server.Store(bytes, FileStorage.Type.png, s.net.ID);
-                s.SetFlag(BaseEntity.Flags.Locked, true);
+                using (var f = s.StartSetFlags(BaseEntity.FlagsUpdateMode.SendNetworkUpdate)) f.Set(BaseEntity.Flags.Locked, true);
                 s.SendNetworkUpdate();
             }
             catch (Exception ex) { PrintWarning("plaque: " + ex.Message); }
