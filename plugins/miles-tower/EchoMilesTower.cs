@@ -14,7 +14,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("EchoMilesTower", "Echo 10X", "1.0.2")]
+    [Info("EchoMilesTower", "Echo 10X", "1.0.3")]
     [Description("Miles' Lookout - a memorial lookout tower for MILES, rebuilt on every map.")]
     public class EchoMilesTower : RustPlugin
     {
@@ -45,7 +45,7 @@ namespace Oxide.Plugins
         {
             data = Interface.Oxide.DataFileSystem.ReadObject<Store>("EchoMilesTower") ?? new Store();
             Collect();
-            if (parts.Count > 0) { built = true; Puts($"Miles' Lookout is standing at {centre} ({parts.Count} pieces)."); timer.Once(5f, ReapplyPlaques); }
+            if (parts.Count > 0) { built = true; Puts($"Miles' Lookout is standing at {centre} ({parts.Count} pieces)."); foreach (var e in parts) if (!(e is BuildingBlock)) { foreach (var gw in e.GetComponents<GroundWatch>()) UnityEngine.Object.Destroy(gw); foreach (var dg in e.GetComponents<DestroyOnGroundMissing>()) UnityEngine.Object.Destroy(dg); } timer.Once(5f, ReapplyPlaques); }
             else timer.Once(10f, () => { var r = Build(null); Puts(r); });
             timer.Every(60f, KeepLit);
         }
@@ -103,6 +103,12 @@ namespace Oxide.Plugins
             var b = e as BuildingBlock;
             if (b != null) { b.blockDefinition = PrefabAttribute.server.Find<Construction>(b.prefabID); b.grounded = true; }
             e.Spawn();
+            if (b == null)
+            {
+                // 1.0.3: Rust's ground check removes signs and deployables it thinks have nothing under them - not here
+                foreach (var gw in e.GetComponents<GroundWatch>()) UnityEngine.Object.Destroy(gw);
+                foreach (var dg in e.GetComponents<DestroyOnGroundMissing>()) UnityEngine.Object.Destroy(dg);
+            }
             if (b != null)
             {
                 try { b.AttachToBuilding(bid); } catch { }
