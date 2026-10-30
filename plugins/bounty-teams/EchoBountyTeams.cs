@@ -1,3 +1,5 @@
+// EchoBountyTeams 1.1.0: staff card in EchoCommand (API_GetEventCard/API_OpenPanel) with an Echo-style control window,
+//   AUTO/MANUAL mode (manual: staff add/remove teams by hand), and player/clan-leader state for the /pp BOUNTY tab.
 // EchoBountyTeams 1.0.0 (Nick, 31 Oct 2026) - the Echo Bounty System, run by the server itself.
 //  * Who: the top 10 clans on the EchoClans leaderboard (score) that have 10+ players in their Rust team (team UI).
 //    Disqualified clans are skipped for the rest of the wipe.
@@ -13,10 +15,11 @@ using System.Linq;
 using Oxide.Core;
 using Oxide.Core.Plugins;
 using UnityEngine;
+using Oxide.Game.Rust.Cui;
 
 namespace Oxide.Plugins
 {
-    [Info("EchoBountyTeams", "Echo 10X", "1.0.0")]
+    [Info("EchoBountyTeams", "Echo 10X", "1.1.0")]
     [Description("Automatic bounty teams: top 10 clans with 10+ players, locked each bounty window, base markers and a raid log.")]
     public class EchoBountyTeams : RustPlugin
     {
@@ -31,6 +34,8 @@ namespace Oxide.Plugins
             public Dictionary<string, string> Dq = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             public List<string> Log = new List<string>();
             public string LockedAt = "";
+            public bool Manual;                                   // 1.1.0: staff pick the teams by hand
+            public List<string> ManualTeams = new List<string>();
         }
         private class Hit { public string Name, Clan, Target, Grid; public int Hits, Boom; public DateTime First, Last; public bool Logged; }
 
@@ -48,8 +53,8 @@ namespace Oxide.Plugins
             timer.Every(300f, FlushHits);
             timer.Once(15f, Tick);
         }
-        private void Unload() { FlushHits(); ClearMarkers(); Save(); }
-        private void OnNewSave(string f) { data = new Store(); Save(); Puts("New wipe: bounty teams, raid log and disqualifications reset."); }
+        private void Unload() { FlushHits(); ClearMarkers(); Save(); foreach (var pl in BasePlayer.activePlayerList) CuiHelper.DestroyUi(pl, UI); }
+        private void OnNewSave(string f) { var man = data != null && data.Manual; data = new Store { Manual = man }; Save(); Puts("New wipe: bounty teams, raid log and disqualifications reset."); }
         private void Save() => Interface.Oxide.DataFileSystem.WriteObject("EchoBountyTeams", data);
         private void Log(string line) { var l = DateTime.UtcNow.ToString("ddd HH:mm") + " UTC  " + line; data.Log.Add(l); if (data.Log.Count > 400) data.Log.RemoveAt(0); Save(); Puts(line); }
 
@@ -104,8 +109,10 @@ namespace Oxide.Plugins
         }
         private void Lock()
         {
-            List<string> why; data.Teams = Candidates(out why); data.LockedAt = DateTime.UtcNow.ToString("u"); Save();
-            Log("Bounty window started. Bounty teams: " + (data.Teams.Count > 0 ? string.Join(", ", data.Teams.Select(t => "[" + t + "]")) : "none qualify"));
+            List<string> why;
+            data.Teams = data.Manual ? data.ManualTeams.Where(t => !data.Dq.ContainsKey(t)).Take(MaxTeams).ToList() : Candidates(out why);
+            data.LockedAt = DateTime.UtcNow.ToString("u"); Save();
+            Log((data.Manual ? "[MANUAL] " : "") + "Bounty window started. Bounty teams: " + (data.Teams.Count > 0 ? string.Join(", ", data.Teams.Select(t => "[" + t + "]")) : "none qualify"));
         }
         private void Announce()
         {
@@ -185,6 +192,228 @@ namespace Oxide.Plugins
             string c = col < 26 ? ((char)('A' + col)).ToString() : "A" + (char)('A' + col - 26);
             return c + row;
         }
+
+
+        // ================= 1.1.0: leaderboard rows, APIs for EchoCommand and /pp =================
+        private class Row { public string Tag, Name; public int Rank, Team, Score; public bool Qual; public string Why = ""; }
+        private List<Row> BoardRows()
+        {
+            var rows = new List<Row>();
+            List<Dictionary<string, object>> board = null;
+            try { board = EchoClans?.Call("API_Leaderboard", "score", 50) as List<Dictionary<string, object>>; } catch { }
+            if (board == null) return rows;
+            var rosters = Rosters(); int i = 0;
+            foreach (var r in board)
+            {
+                var tag = r["tag"] as string; if (string.IsNullOrEmpty(tag)) continue; i++;
+                KeyValuePair<ulong, int> ro; int team = rosters.TryGetValue(tag, out ro) ? ro.Value : 0;
+                var row = new Row { Tag = tag, Name = r.ContainsKey("name") ? r["name"] as string : "", Rank = i, Team = team, Score = r.ContainsKey("score") ? Convert.ToInt32(r["score"]) : 0 };
+                string dq;
+                if (data.Dq.TryGetValue(tag, out dq)) row.Why = "disqualified: " + dq;
+                else if (team < MinTeam) row.Why = $"{team}/{MinTeam} in team";
+                else row.Qual = true;
+                rows.Add(row);
+            }
+            int q = 0; foreach (var r in rows) if (r.Qual) { q++; if (q > MaxTeams) { r.Qual = false; r.Why = "outside the top 10 qualifiers"; } }
+            return rows;
+        }
+
+        // EchoCommand event card
+        private Dictionary<string, object> API_GetEventCard()
+        {
+            return new Dictionary<string, object>
+            {
+                ["id"] = "bountyteams", ["title"] = "Bounty Teams", ["image"] = "ev_bounty", ["active"] = bounty, ["auto"] = !data.Manual,
+                ["flag"] = data.Manual ? "MANUAL" : "AUTO",
+                ["status"] = bounty ? (data.Teams.Count > 0 ? data.Teams.Count + " bounty team" + (data.Teams.Count == 1 ? "" : "s") + " live: " + string.Join(" ", data.Teams.Take(4).Select(t => "[" + t + "]")) : "Bounty hours - no team qualifies")
+                                    : (data.Manual ? "Manual: " + data.ManualTeams.Count + " picked" : "Auto: locks at the next bounty window")
+            };
+        }
+        private void API_OpenPanel(BasePlayer p) { if (p != null && p.IsConnected && p.IsAdmin) DrawStaff(p); }
+        private string API_Act(BasePlayer p, string op, string arg) => Act(p, op, arg);
+
+        // /pp BOUNTY tab (players and clan leaders)
+        private Dictionary<string, object> API_PlayerState(BasePlayer p)
+        {
+            var rows = BoardRows();
+            var teams = bounty ? data.Teams : (data.Manual ? data.ManualTeams.Where(t => !data.Dq.ContainsKey(t)).Take(MaxTeams).ToList() : rows.Where(r => r.Qual).Select(r => r.Tag).ToList());
+            var list = teams.Select(t => { var r = rows.FirstOrDefault(x => string.Equals(x.Tag, t, StringComparison.OrdinalIgnoreCase)); return (object)new Dictionary<string, object> { ["tag"] = t, ["rank"] = r?.Rank ?? 0, ["team"] = r?.Team ?? 0, ["base"] = baseAt.ContainsKey(t) }; }).ToList();
+            var my = new Dictionary<string, object> { ["inClan"] = false };
+            var tag = p != null ? ClanTagOf(p.userID) : null;
+            if (tag != null)
+            {
+                var r = rows.FirstOrDefault(x => string.Equals(x.Tag, tag, StringComparison.OrdinalIgnoreCase));
+                int team = 0; try { var t = RelationshipManager.ServerInstance?.FindPlayersTeam(p.userID); if (t != null) team = t.members.Count; } catch { }
+                bool isB = teams.Any(t => string.Equals(t, tag, StringComparison.OrdinalIgnoreCase));
+                ulong tc = 0; try { var o = EchoTC?.Call("API_ClanBaseTc", p.userID); if (o is ulong) tc = (ulong)o; } catch { }
+                string dq; data.Dq.TryGetValue(tag, out dq);
+                my = new Dictionary<string, object> { ["inClan"] = true, ["tag"] = tag, ["team"] = team, ["need"] = Math.Max(0, MinTeam - team), ["rank"] = r?.Rank ?? 0, ["bounty"] = isB, ["qual"] = r != null && r.Qual, ["why"] = r?.Why ?? "not on the leaderboard yet", ["base"] = tc != 0, ["dq"] = dq ?? "" };
+            }
+            return new Dictionary<string, object> { ["bounty"] = bounty, ["manual"] = data.Manual, ["teams"] = list, ["my"] = my, ["min"] = MinTeam, ["max"] = MaxTeams };
+        }
+
+        // ---------- staff actions (UI buttons, EchoCommand, console) ----------
+        private string Act(BasePlayer p, string op, string arg)
+        {
+            if (p != null && !p.IsAdmin) return "staff only";
+            string who = p != null ? p.displayName : "console";
+            switch (op)
+            {
+                case "auto": data.Manual = false; Save(); Log($"{who} switched bounty teams to AUTO"); if (bounty) { Lock(); RefreshBases(); Announce(); } return "Auto: the server picks the top 10 qualifying clans.";
+                case "manual": data.Manual = true; if (data.ManualTeams.Count == 0) data.ManualTeams = new List<string>(data.Teams); Save(); Log($"{who} switched bounty teams to MANUAL"); return "Manual: staff pick the teams.";
+                case "toggle": return Act(p, data.Manual ? "auto" : "manual", arg);
+                case "add":
+                    if (string.IsNullOrEmpty(arg)) return "no clan";
+                    if (!data.ManualTeams.Contains(arg, StringComparer.OrdinalIgnoreCase)) data.ManualTeams.Add(arg);
+                    if (!data.Manual) { data.Manual = true; Log($"{who} switched bounty teams to MANUAL"); }
+                    Save(); Log($"{who} added [{arg}] as a bounty team"); if (bounty) { Lock(); RefreshBases(); } return $"[{arg}] added.";
+                case "remove":
+                    data.ManualTeams.RemoveAll(t => string.Equals(t, arg, StringComparison.OrdinalIgnoreCase));
+                    if (data.Manual) data.Teams.RemoveAll(t => string.Equals(t, arg, StringComparison.OrdinalIgnoreCase));
+                    Save(); Log($"{who} removed [{arg}] from the bounty teams"); if (bounty) RefreshBases(); return $"[{arg}] removed.";
+                case "dq":
+                    if (string.IsNullOrEmpty(arg)) return "no clan";
+                    data.Dq[arg] = "broke server rules"; data.Teams.RemoveAll(t => string.Equals(t, arg, StringComparison.OrdinalIgnoreCase)); data.ManualTeams.RemoveAll(t => string.Equals(t, arg, StringComparison.OrdinalIgnoreCase)); Save();
+                    Log($"[{arg}] DISQUALIFIED for this wipe by {who}"); Server.Broadcast(Tag + $"[{arg}] has been disqualified from the bounty system for this wipe."); if (bounty) RefreshBases(); return $"[{arg}] disqualified.";
+                case "undq": data.Dq.Remove(arg ?? ""); Save(); Log($"{who} lifted the disqualification on [{arg}]"); return $"[{arg}] can qualify again.";
+                case "relock": Lock(); if (bounty) { RefreshBases(); Announce(); } return "Locked: " + (data.Teams.Count > 0 ? string.Join(" ", data.Teams.Select(t => "[" + t + "]")) : "none");
+            }
+            return "unknown action";
+        }
+
+        // ---------- staff window (Echo art kit from EchoCommand_Images) ----------
+        private const string UI = "EchoBountyTeams.UI";
+        private readonly Dictionary<string, string> art = new Dictionary<string, string>();
+        private readonly Dictionary<ulong, string> view = new Dictionary<ulong, string>();
+        private readonly Dictionary<ulong, string> msg = new Dictionary<ulong, string>();
+        private static readonly string[] ArtKeys = { "window_bg_1000x640", "ev_bounty", "close_34x34", "pane_318x510", "pane_648x510", "btn_on_145x32", "btn_145x32", "btn_red_144x32", "btn_teal_145x32", "btn_90x26", "btn_on_94x28", "prow_632x36", "flag_ok_70x16", "flag_cy_70x16", "flag_red_70x16", "chip_on_112x26", "chip_112x26" };
+        private void LoadArt()
+        {
+            if (art.Count > 0) return;
+            var net = CommunityEntity.ServerInstance.net.ID;
+            foreach (var f in new[] { "EchoCommand_Images", "EchoCommand_Images_Extra" })
+            {
+                Dictionary<string, string> kit = null;
+                try { if (Interface.Oxide.DataFileSystem.ExistsDatafile(f)) kit = Interface.Oxide.DataFileSystem.ReadObject<Dictionary<string, string>>(f); } catch { }
+                if (kit == null) continue;
+                foreach (var k in ArtKeys) { string b; if (!art.ContainsKey(k) && kit.TryGetValue(k, out b)) try { art[k] = FileStorage.server.Store(Convert.FromBase64String(b), FileStorage.Type.png, net, 0u).ToString(); } catch { } }
+            }
+        }
+        private const string Cy = "0.098 0.925 1 1", White = "1 1 1 1", Dim = "0.62 0.72 0.78 1", Ok = "0.45 0.95 0.55 1", Red = "1 0.42 0.36 1", Gold = "1 0.82 0.4 1";
+        private static string Off(float x0, float y0) => $"{x0} {-y0}";
+        private void Pic(CuiElementContainer c, string parent, string key, float x0, float y0, float x1, float y1, string fallback = null)
+        {
+            string id;
+            if (art.TryGetValue(key, out id)) c.Add(new CuiElement { Parent = parent, Components = { new CuiRawImageComponent { Png = id }, new CuiRectTransformComponent { AnchorMin = "0 1", AnchorMax = "0 1", OffsetMin = $"{x0} {-y1}", OffsetMax = $"{x1} {-y0}" } } });
+            else if (fallback != null) c.Add(new CuiPanel { Image = { Color = fallback }, RectTransform = { AnchorMin = "0 1", AnchorMax = "0 1", OffsetMin = $"{x0} {-y1}", OffsetMax = $"{x1} {-y0}" } }, parent);
+        }
+        private void T(CuiElementContainer c, string parent, string text, int size, string color, TextAnchor a, float x0, float y0, float x1, float y1, bool bold = false)
+            => c.Add(new CuiElement { Parent = parent, Components = { new CuiTextComponent { Text = text, FontSize = size, Color = color, Align = a, Font = bold ? "robotocondensed-bold.ttf" : "robotocondensed-regular.ttf" }, new CuiRectTransformComponent { AnchorMin = "0 1", AnchorMax = "0 1", OffsetMin = $"{x0} {-y1}", OffsetMax = $"{x1} {-y0}" } } });
+        private void B(CuiElementContainer c, string parent, string cmd, string label, string skin, string color, float x0, float y0, float x1, float y1, int size = 11)
+        {
+            Pic(c, parent, skin, x0, y0, x1, y1, "0.12 0.2 0.25 0.95");
+            T(c, parent, label, size, color, TextAnchor.MiddleCenter, x0, y0, x1, y1, true);
+            c.Add(new CuiButton { Button = { Command = cmd, Color = "0 0 0 0" }, Text = { Text = "" }, RectTransform = { AnchorMin = "0 1", AnchorMax = "0 1", OffsetMin = $"{x0} {-y1}", OffsetMax = $"{x1} {-y0}" } }, parent);
+        }
+
+        private void DrawStaff(BasePlayer p)
+        {
+            LoadArt();
+            CuiHelper.DestroyUi(p, UI);
+            string v; if (!view.TryGetValue(p.userID, out v)) v = "teams";
+            var c = new CuiElementContainer();
+            c.Add(new CuiPanel { Image = { Color = "0 0 0 0.55" }, RectTransform = { AnchorMin = "0 0", AnchorMax = "1 1" }, CursorEnabled = true, KeyboardEnabled = true }, "Overlay", UI);
+            var w = UI + ".w";
+            c.Add(new CuiPanel { Image = { Color = "0 0 0 0" }, RectTransform = { AnchorMin = "0.5 0.5", AnchorMax = "0.5 0.5", OffsetMin = "-500 -320", OffsetMax = "500 320" } }, UI, w);
+            Pic(c, w, "window_bg_1000x640", 0, 0, 1000, 640, "0.04 0.07 0.09 0.98");
+            T(c, w, "BOUNTY TEAMS", 24, White, TextAnchor.MiddleLeft, 30, 16, 500, 50, true);
+            T(c, w, "ECHO BOUNTY SYSTEM  ·  runs by itself, staff can take over in manual", 11, Cy, TextAnchor.MiddleLeft, 30, 46, 700, 64);
+            Pic(c, w, "close_34x34", 946, 16, 980, 50, "0.6 0.15 0.15 0.9");
+            c.Add(new CuiButton { Button = { Command = "bountyteams.ui close", Color = "0 0 0 0" }, Text = { Text = "" }, RectTransform = { AnchorMin = "0 1", AnchorMax = "0 1", OffsetMin = "946 -50", OffsetMax = "980 -16" } }, w);
+
+            // left: art + mode + status
+            Pic(c, w, "pane_318x510", 20, 74, 338, 620, "0.07 0.11 0.14 0.95");
+            Pic(c, w, "ev_bounty", 34, 88, 324, 270);
+            float y = 282;
+            T(c, w, "MODE", 11, Dim, TextAnchor.MiddleLeft, 36, y, 150, y + 20, true);
+            B(c, w, "bountyteams.ui do toggle", data.Manual ? "MANUAL" : "AUTO", data.Manual ? "btn_145x32" : "btn_on_145x32", data.Manual ? Gold : Ok, 170, y - 4, 315, y + 28);
+            y += 40;
+            T(c, w, "BOUNTY HOURS", 11, Dim, TextAnchor.MiddleLeft, 36, y, 170, y + 20, true);
+            T(c, w, bounty ? "ON - bases marked" : "off", 12, bounty ? Red : White, TextAnchor.MiddleRight, 170, y, 315, y + 20, true);
+            y += 26;
+            T(c, w, "LOCKED", 11, Dim, TextAnchor.MiddleLeft, 36, y, 170, y + 20, true);
+            T(c, w, string.IsNullOrEmpty(data.LockedAt) ? "not yet" : data.LockedAt.Replace("Z", " UTC"), 11, White, TextAnchor.MiddleRight, 150, y, 315, y + 20);
+            y += 26;
+            T(c, w, "TEAMS / DQ", 11, Dim, TextAnchor.MiddleLeft, 36, y, 170, y + 20, true);
+            T(c, w, (bounty ? data.Teams.Count : (data.Manual ? data.ManualTeams.Count : BoardRows().Count(r => r.Qual))) + " / " + data.Dq.Count, 12, White, TextAnchor.MiddleRight, 170, y, 315, y + 20, true);
+            y += 36;
+            B(c, w, "bountyteams.ui do relock", "RE-LOCK NOW", "btn_teal_145x32", White, 34, y, 179, y + 32);
+            B(c, w, "bountyteams.ui view log", "RAID LOG", v == "log" ? "btn_on_145x32" : "btn_145x32", White, 183, y, 324, y + 32);
+            y += 44;
+            T(c, w, data.Manual ? "Manual: only the clans you ADD are bounty teams. Switch back to AUTO and the server picks the top 10 again."
+                                : "Auto: at every bounty window the server takes the top 10 clans on the leaderboard with 10+ players in their team.", 10, Dim, TextAnchor.UpperLeft, 36, y, 320, y + 70);
+            string m; if (msg.TryGetValue(p.userID, out m) && !string.IsNullOrEmpty(m)) T(c, w, m, 11, Gold, TextAnchor.MiddleLeft, 36, 586, 330, 610, true);
+
+            // right: tabs
+            Pic(c, w, "pane_648x510", 352, 74, 980, 620, "0.07 0.11 0.14 0.95");
+            B(c, w, "bountyteams.ui view teams", "BOUNTY TEAMS", v == "teams" ? "chip_on_112x26" : "chip_112x26", White, 368, 88, 498, 114, 10);
+            B(c, w, "bountyteams.ui view board", "LEADERBOARD", v == "board" ? "chip_on_112x26" : "chip_112x26", White, 504, 88, 634, 114, 10);
+            B(c, w, "bountyteams.ui view log", "RAID LOG", v == "log" ? "chip_on_112x26" : "chip_112x26", White, 640, 88, 770, 114, 10);
+            y = 126;
+            if (v == "log")
+            {
+                var lines = data.Log.Skip(Math.Max(0, data.Log.Count - 22)).ToList();
+                if (lines.Count == 0) T(c, w, "Nothing logged yet this wipe.", 12, Dim, TextAnchor.MiddleLeft, 372, y, 960, y + 24);
+                foreach (var l in lines) { T(c, w, l, 10, l.Contains("DESTROYED") || l.Contains("DISQUALIFIED") ? Red : l.Contains("RAID") ? Gold : White, TextAnchor.MiddleLeft, 372, y, 966, y + 20); y += 21; }
+            }
+            else if (v == "board")
+            {
+                T(c, w, "#   CLAN                         TEAM      SCORE     STATUS", 10, Dim, TextAnchor.MiddleLeft, 376, y, 960, y + 18, true); y += 22;
+                foreach (var r in BoardRows().Take(14))
+                {
+                    bool isT = data.Teams.Contains(r.Tag, StringComparer.OrdinalIgnoreCase) || (data.Manual && data.ManualTeams.Contains(r.Tag, StringComparer.OrdinalIgnoreCase));
+                    Pic(c, w, "prow_632x36", 366, y, 966, y + 30, "0.09 0.13 0.16 0.85");
+                    T(c, w, r.Rank + ".", 11, Dim, TextAnchor.MiddleLeft, 376, y, 400, y + 30, true);
+                    T(c, w, "[" + r.Tag + "] " + r.Name, 11, isT ? Gold : White, TextAnchor.MiddleLeft, 400, y, 600, y + 30, true);
+                    T(c, w, r.Team + "/" + MinTeam, 11, r.Team >= MinTeam ? Ok : Dim, TextAnchor.MiddleLeft, 606, y, 660, y + 30);
+                    T(c, w, r.Score.ToString("N0"), 11, White, TextAnchor.MiddleLeft, 664, y, 730, y + 30);
+                    T(c, w, isT ? "BOUNTY TEAM" : r.Qual ? "qualifies" : r.Why, 10, isT ? Gold : r.Qual ? Ok : Dim, TextAnchor.MiddleLeft, 734, y, 860, y + 30);
+                    if (data.Manual && !isT && !data.Dq.ContainsKey(r.Tag)) B(c, w, "bountyteams.ui do add " + r.Tag, "ADD", "btn_90x26", Ok, 866, y + 3, 956, y + 27, 10);
+                    else if (data.Dq.ContainsKey(r.Tag)) B(c, w, "bountyteams.ui do undq " + r.Tag, "UN-DQ", "btn_90x26", White, 866, y + 3, 956, y + 27, 10);
+                    y += 33;
+                }
+            }
+            else
+            {
+                var teams = bounty ? data.Teams : (data.Manual ? data.ManualTeams : BoardRows().Where(r => r.Qual).Select(r => r.Tag).ToList());
+                T(c, w, bounty ? "LOCKED FOR THIS BOUNTY WINDOW" : data.Manual ? "PICKED BY STAFF (locks when bounty hours start)" : "WOULD BE LOCKED IF BOUNTY STARTED NOW", 11, Cy, TextAnchor.MiddleLeft, 372, y, 960, y + 20, true); y += 26;
+                if (teams.Count == 0) T(c, w, data.Manual ? "No teams picked. Open LEADERBOARD and press ADD." : "No clan qualifies yet: 10+ players in the team and a top 10 leaderboard spot.", 12, Dim, TextAnchor.MiddleLeft, 372, y, 960, y + 24);
+                var rows = BoardRows();
+                foreach (var t in teams.Take(MaxTeams))
+                {
+                    var r = rows.FirstOrDefault(x => string.Equals(x.Tag, t, StringComparison.OrdinalIgnoreCase));
+                    Pic(c, w, "prow_632x36", 366, y, 966, y + 36, "0.09 0.13 0.16 0.85");
+                    T(c, w, "[" + t + "]" + (r != null && !string.IsNullOrEmpty(r.Name) ? " " + r.Name : ""), 12, Gold, TextAnchor.MiddleLeft, 378, y, 600, y + 36, true);
+                    T(c, w, (r != null ? "#" + r.Rank + "  ·  " + r.Team + " in team" : "not on the board") + (bounty ? (baseAt.ContainsKey(t) ? "  ·  base marked" : "  ·  no base registered") : ""), 10, Dim, TextAnchor.MiddleLeft, 600, y, 790, y + 36);
+                    if (data.Manual) B(c, w, "bountyteams.ui do remove " + t, "REMOVE", "btn_90x26", White, 774, y + 5, 864, y + 31, 10);
+                    B(c, w, "bountyteams.ui do dq " + t, "DISQUALIFY", "btn_red_144x32", White, 868, y + 5, 960, y + 31, 9);
+                    y += 40;
+                }
+            }
+            CuiHelper.AddUi(p, c);
+        }
+
+        [ConsoleCommand("bountyteams.ui")]
+        private void CUi(ConsoleSystem.Arg a)
+        {
+            var p = a.Player(); if (p == null || !p.IsAdmin) return;
+            string op = a.GetString(0, "");
+            if (op == "close") { CuiHelper.DestroyUi(p, UI); return; }
+            if (op == "view") view[p.userID] = a.GetString(1, "teams");
+            if (op == "do") msg[p.userID] = Act(p, a.GetString(1, ""), a.GetString(2, ""));
+            DrawStaff(p);
+        }
+        [ChatCommand("bountyadmin")] private void ChAdmin(BasePlayer p, string c, string[] args) { if (p.IsAdmin) DrawStaff(p); }
 
         // ---------- commands ----------
         [ChatCommand("bountyteams")]
