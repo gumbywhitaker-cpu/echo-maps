@@ -14,7 +14,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("EchoMilesTower", "Echo 10X", "1.0.0")]
+    [Info("EchoMilesTower", "Echo 10X", "1.0.1")]
     [Description("Miles' Lookout - a memorial lookout tower for MILES, rebuilt on every map.")]
     public class EchoMilesTower : RustPlugin
     {
@@ -139,15 +139,15 @@ namespace Oxide.Plugins
                     bool door = lv == 0 && s == sq[0];
                     string pxe = door ? PDoorway : (lv > 0 && (lv + (s.y > 0 ? 1 : 0)) % 2 == 1 ? PWindow : PWall);
                     string pze = lv > 0 && (lv + (s.x > 0 ? 1 : 0)) % 2 == 0 ? PWindow : PWall;
-                    Spawn(pxe, at3(xe, y), Quaternion.Euler(0f, 90f, 0f), bid);
-                    Spawn(pze, at3(ze, y), Quaternion.identity, bid);
+                    Spawn(pxe, at3(xe, y), Quaternion.identity, bid);                 // 1.0.1: walls on x-edges face along x
+                    Spawn(pze, at3(ze, y), Quaternion.Euler(0f, 90f, 0f), bid);
                 }
             }
             float roof = top + Levels * LevelH;
             foreach (var s in sq)
             {
-                Spawn(PLow, at3(new Vector2(s.x * 2f, s.y), roof), Quaternion.Euler(0f, 90f, 0f), bid);
-                Spawn(PLow, at3(new Vector2(s.x, s.y * 2f), roof), Quaternion.identity, bid);
+                Spawn(PLow, at3(new Vector2(s.x * 2f, s.y), roof), Quaternion.identity, bid);
+                Spawn(PLow, at3(new Vector2(s.x, s.y * 2f), roof), Quaternion.Euler(0f, 90f, 0f), bid);
             }
             // the beacon and lanterns on the open top
             var fire = Spawn(PFire, at3(sq[2], roof + 0.05f), Quaternion.identity, bid);
