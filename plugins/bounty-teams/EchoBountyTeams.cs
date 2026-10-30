@@ -1,3 +1,6 @@
+// EchoBountyTeams 1.2.1: no duplicate markers. The map already marks every clan base (EchoStaffMap in EchoTweaks,
+//   "[TAG] $50 BOUNTY K13"); this plugin now writes each clan's live money into that label through EchoBountyPrices
+//   instead of spawning its own markers. A clan's money = its own $50 (until someone takes it) + what it has won.
 // EchoBountyTeams 1.2.0 (Nick, 31 Oct): TEST bounty money. Every clan with a registered base carries a $50 bounty with its own map marker
 //   in bounty hours. Destroy a clan's TC in bounty hours and your clan takes their $50; the losing clan can raid you back to take it
 //   back. Day 3 is free for all (EchoTC). The bank lasts across wipes and resets monthly; the richest clan can cash out.
@@ -23,11 +26,11 @@ using Oxide.Game.Rust.Cui;
 
 namespace Oxide.Plugins
 {
-    [Info("EchoBountyTeams", "Echo 10X", "1.2.0")]
+    [Info("EchoBountyTeams", "Echo 10X", "1.2.1")]
     [Description("Automatic bounty teams: top 10 clans with 10+ players, locked each bounty window, base markers and a raid log.")]
     public class EchoBountyTeams : RustPlugin
     {
-        [PluginReference] private Plugin EchoClans, EchoTC;
+        [PluginReference] private Plugin EchoClans, EchoTC, EchoBountyPrices;
         private const int MaxTeams = 10, MinTeam = 10;
         // 1.2.0 test weekend: every clan with a registered base is a bounty clan (no 10-player / top-10 rule)
         private const bool TestAllClans = true;
@@ -58,6 +61,23 @@ namespace Oxide.Plugins
         private void SaveBank() => Interface.Oxide.DataFileSystem.WriteObject("EchoBountyTeams_Bank", bank);
         private static string MonthNow() { var syd = DateTime.UtcNow.AddHours(11); return syd.ToString("yyyy-MM"); }
         private int MoneyOf(string tag) { int m; return tag != null && bank.Money.TryGetValue(tag, out m) ? m : 0; }
+        private int Total(string tag) => MoneyOf(tag) + (bank.Claimed.Contains(tag, StringComparer.OrdinalIgnoreCase) ? 0 : BountyAmount);
+        private readonly Dictionary<string, string> pushed = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        // write every clan's money into the existing base-marker label (EchoBountyPrices -> EchoStaffMap), only when it changed
+        private void SyncPrices()
+        {
+            if (EchoBountyPrices == null || !EchoBountyPrices.IsLoaded) return;
+            List<Dictionary<string, object>> dir = null;
+            try { dir = EchoClans?.Call("API_ClanDirectory") as List<Dictionary<string, object>>; } catch { }
+            if (dir == null) return;
+            foreach (var c in dir)
+            {
+                var tag = c.ContainsKey("tag") ? c["tag"]?.ToString() : null; if (string.IsNullOrEmpty(tag)) continue;
+                var v = Total(tag).ToString(); string old;
+                if (pushed.TryGetValue(tag, out old) && old == v) continue;
+                try { EchoBountyPrices.Call("API_SetClanBounty", null, tag, v); pushed[tag] = v; } catch { }
+            }
+        }
         private void AddMoney(string tag, int amt) { bank.Money[tag] = Math.Max(0, MoneyOf(tag) + amt); }
         private string BountyLabel(string tag)
         {
@@ -71,7 +91,7 @@ namespace Oxide.Plugins
             if (bank.Month == now) return;
             if (!string.IsNullOrEmpty(bank.Month) && bank.Money.Count > 0)
             {
-                var top = bank.Money.OrderByDescending(k => k.Value).First();
+                var top = bank.Money.Keys.Select(k => new KeyValuePair<string, int>(k, Total(k))).OrderByDescending(k => k.Value).First();
                 var line = $"{bank.Month}: [{top.Key}] finished with ${top.Value} and can cash out (TEST - not real money)";
                 bank.History.Add(line); Log("MONTH END " + line);
                 Server.Broadcast(Tag + $"Month over! <color=#ffd27f>[{top.Key}]</color> finished with <color=#ffd27f>${top.Value}</color> and can cash out. Bounty bank reset. <size=11>({TestNote})</size>");
@@ -108,6 +128,7 @@ namespace Oxide.Plugins
         private void Tick()
         {
             CheckMonth();
+            SyncPrices();
             bool b = BountyNow();
             if (b && !bounty) { bounty = true; Lock(); Announce(); }
             else if (!b && bounty) { bounty = false; FlushHits(); ClearMarkers(); baseAt.Clear(); tcAt.Clear(); Server.Broadcast(Tag + "Bounty hours are over. Bounty teams are shielded again until the next window."); }
@@ -178,17 +199,8 @@ namespace Oxide.Plugins
                 if (ent == null) continue;
                 tcAt[tag] = tc; baseAt[tag] = ent.transform.position;
             }
-            var snap = string.Join(";", baseAt.OrderBy(k => k.Key).Select(k => k.Key + k.Value.ToString("F0") + BountyLabel(k.Key) + MoneyOf(k.Key)));
-            if (snap == markerSnap && markers.Count > 0) return;   // nothing moved: keep the markers (no flicker)
-            ClearMarkers();
-            markerSnap = snap;
-            foreach (var kv in baseAt)
-            {
-                var m = GameManager.server.CreateEntity("assets/prefabs/tools/map/genericradiusmarker.prefab", kv.Value) as MapMarkerGenericRadius;
-                if (m != null) { m.alpha = 0.55f; m.color1 = new Color(1f, 0.25f, 0.2f); m.color2 = Color.black; m.radius = 0.3f; m.Spawn(); m.SendUpdate(); markers.Add(m); }
-                var v = GameManager.server.CreateEntity("assets/prefabs/deployable/vendingmachine/vending_mapmarker.prefab", kv.Value) as VendingMachineMapMarker;
-                if (v != null) { v.markerShopName = "BOUNTY [" + kv.Key + "] " + BountyLabel(kv.Key) + "  |  bank $" + MoneyOf(kv.Key); v.Spawn(); v.SendNetworkUpdate(); markers.Add(v); }
-            }
+            ClearMarkers();   // 1.2.1: markers come from EchoStaffMap; we only feed it the money
+            SyncPrices();
         }
         private void ClearMarkers() { markerSnap = ""; foreach (var m in markers) if (m != null && !m.IsDestroyed) m.Kill(); markers.Clear(); }
 
@@ -320,8 +332,8 @@ namespace Oxide.Plugins
                 string dq; data.Dq.TryGetValue(tag, out dq);
                 my = new Dictionary<string, object> { ["inClan"] = true, ["tag"] = tag, ["team"] = team, ["need"] = Math.Max(0, MinTeam - team), ["rank"] = r?.Rank ?? 0, ["bounty"] = isB, ["qual"] = r != null && r.Qual, ["why"] = r?.Why ?? "not on the leaderboard yet", ["base"] = tc != 0, ["dq"] = dq ?? "" };
             }
-            if (tag != null) { my["money"] = MoneyOf(tag); my["bountyLabel"] = BountyLabel(tag); }
-            var rich = bank.Money.Where(k => k.Value > 0).OrderByDescending(k => k.Value).Take(5).Select(k => (object)("[" + k.Key + "] $" + k.Value)).ToList();
+            if (tag != null) { my["money"] = Total(tag); my["bountyLabel"] = BountyLabel(tag); }
+            var rich = bank.Money.Keys.Select(k => new KeyValuePair<string, int>(k, Total(k))).Where(k => k.Value > 0).OrderByDescending(k => k.Value).Take(5).Select(k => (object)("[" + k.Key + "] $" + k.Value)).ToList();
             return new Dictionary<string, object> { ["bounty"] = bounty, ["manual"] = data.Manual, ["teams"] = list, ["my"] = my, ["min"] = MinTeam, ["max"] = MaxTeams,
                 ["test"] = TestAllClans, ["amount"] = BountyAmount, ["rich"] = rich, ["month"] = bank.Month, ["note"] = TestNote };
         }
@@ -451,7 +463,7 @@ namespace Oxide.Plugins
                     T(c, w, r.Rank + ".", 11, Dim, TextAnchor.MiddleLeft, 376, y, 400, y + 30, true);
                     T(c, w, "[" + r.Tag + "] " + r.Name, 11, isT ? Gold : White, TextAnchor.MiddleLeft, 400, y, 600, y + 30, true);
                     T(c, w, r.Team + "/" + MinTeam, 11, r.Team >= MinTeam ? Ok : Dim, TextAnchor.MiddleLeft, 606, y, 660, y + 30);
-                    T(c, w, "$" + MoneyOf(r.Tag), 11, Gold, TextAnchor.MiddleLeft, 664, y, 730, y + 30, true);
+                    T(c, w, "$" + Total(r.Tag), 11, Gold, TextAnchor.MiddleLeft, 664, y, 730, y + 30, true);
                     T(c, w, isT ? "BOUNTY TEAM" : r.Qual ? "qualifies" : r.Why, 10, isT ? Gold : r.Qual ? Ok : Dim, TextAnchor.MiddleLeft, 734, y, 860, y + 30);
                     if (data.Manual && !isT && !data.Dq.ContainsKey(r.Tag)) B(c, w, "bountyteams.ui do add " + r.Tag, "ADD", "btn_90x26", Ok, 866, y + 3, 956, y + 27, 10);
                     else if (data.Dq.ContainsKey(r.Tag)) B(c, w, "bountyteams.ui do undq " + r.Tag, "UN-DQ", "btn_90x26", White, 866, y + 3, 956, y + 27, 10);
