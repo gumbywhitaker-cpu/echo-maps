@@ -128,8 +128,8 @@ namespace Oxide.Plugins
             }
             var snap = string.Join(";", baseAt.OrderBy(k => k.Key).Select(k => k.Key + k.Value.ToString("F0")));
             if (snap == markerSnap && markers.Count > 0) return;   // nothing moved: keep the markers (no flicker)
-            markerSnap = snap;
             ClearMarkers();
+            markerSnap = snap;
             foreach (var kv in baseAt)
             {
                 var m = GameManager.server.CreateEntity("assets/prefabs/tools/map/genericradiusmarker.prefab", kv.Value) as MapMarkerGenericRadius;
