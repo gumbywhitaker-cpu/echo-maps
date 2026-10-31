@@ -1,3 +1,6 @@
+// EchoRaidHours 1.7.0 (Nick, 1 Nov): ALLIES. Clans allied with the attackers (/clan ally) can join the attack, clans allied
+//   with the defenders can defend. Every attacking clan that hits the base or stands in the capture bubble gets an equal share
+//   of the bounty. Sides are locked when the raid starts.
 // EchoRaidHours 1.6.0 (Nick, 31 Oct): TUG CAPTURE. Raid = red bubble. When the attackers break the TC the bubble turns PURPLE
 //   and a capture bar starts: attackers inside fill it, defenders inside stall it, defenders alone drain it. Full bar = attackers
 //   win (bounty paid then, not when the TC breaks). Raid timer or raid hours run out first = defenders win.
@@ -33,7 +36,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("EchoRaidHours", "Echo 10X", "1.6.0")]
+    [Info("EchoRaidHours", "Echo 10X", "1.7.0")]
     [Description("Simple raid hours: clan bases protected outside raid hours, offline protection inside them.")]
     public class EchoRaidHours : RustPlugin
     {
@@ -69,6 +72,7 @@ namespace Oxide.Plugins
         private class Raid
         {
             public uint B; public ulong Tc; public Vector3 C, K; public float R; public string Att, AttL, Def, DefL, AttTag, DefTag; public ulong AttU, DefU; public float Ends; public string Grid;
+            public HashSet<string> AttSide = new HashSet<string>(), DefSide = new HashSet<string>(), Joined = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             public bool Capturing; public float Progress, LastTick; public int InA, InD; public List<SphereEntity> Dome = new List<SphereEntity>(); public string DomePrefab;
         }
         private void RaidDome(Raid r, string prefab)
@@ -100,7 +104,7 @@ namespace Oxide.Plugins
             foreach (var p in BasePlayer.activePlayerList)
             {
                 if (p == null || p.IsDead() || p.IsSleeping() || p.IsWounded() || !Inside(r, p)) continue;
-                var g = GroupOf(p); if (g == r.Att) a++; else if (g == r.Def) d++;
+                var g = GroupOf(p); if (r.AttSide.Contains(g)) { a++; Join(r, p); } else if (r.DefSide.Contains(g)) d++;
             }
             r.InA = a; r.InD = d;
             if (a > 0 && d == 0) r.Progress += dt / CaptureSeconds * Mathf.Min(1f + 0.25f * (a - 1), 2f);
@@ -139,7 +143,10 @@ namespace Oxide.Plugins
             return p.currentTeam != 0 ? "t:" + p.currentTeam : "p:" + (ulong)p.userID;
         }
         private string LabelOf(BasePlayer p) { var t = TagOf(p.userID); return !string.IsNullOrEmpty(t) ? "[" + t + "]" : p.currentTeam != 0 ? p.displayName + "'s team" : p.displayName; }
-        private bool InRaid(Raid r, BasePlayer p) { var g = GroupOf(p); return g == r.Att || g == r.Def; }
+        private bool InRaid(Raid r, BasePlayer p) { var g = GroupOf(p); return r.AttSide.Contains(g) || r.DefSide.Contains(g); }
+        private bool OnAttack(Raid r, BasePlayer p) => r.AttSide.Contains(GroupOf(p));
+        private void Join(Raid r, BasePlayer p) { var t = TagOf(p.userID); if (!string.IsNullOrEmpty(t)) r.Joined.Add(t); }
+        private List<string> AlliesOf(string tag) { try { return EchoClans?.Call("AlliesOf", tag) as List<string> ?? new List<string>(); } catch { return new List<string>(); } }
         private Raid RaidAt(Vector3 pos)
         {
             foreach (var r in raidByB.Values) { var d = pos - r.C; d.y = 0f; if (d.magnitude <= r.R) return r; }
@@ -174,7 +181,13 @@ namespace Oxide.Plugins
             if (att == def) return;
             Vector3 c; float r; Shape(tc, out c, out r);
             var raid = new Raid { B = tc.buildingID, Tc = tc.net.ID.Value, C = c, K = tc.transform.position, R = r, Att = att, AttL = LabelOf(atk), Def = def, DefL = "[" + defTag + "]", AttTag = TagOf(atk.userID), DefTag = defTag, AttU = (ulong)atk.userID, DefU = defU, Ends = Time.realtimeSinceStartup + RaidMinutes * 60f, Grid = GridOf(c) };
+            raid.AttSide.Add(att); raid.DefSide.Add(def); raid.Joined.Add(raid.AttTag);
+            foreach (var t in AlliesOf(raid.AttTag)) raid.AttSide.Add("c:" + t.ToUpperInvariant());
+            foreach (var t in AlliesOf(defTag)) { var k = "c:" + t.ToUpperInvariant(); if (!raid.AttSide.Contains(k)) raid.DefSide.Add(k); }
+            raid.AttSide.Remove(def);
             raidByB[raid.B] = raid; RaidDome(raid, Red);
+            string side(HashSet<string> h, string lead) { var o = h.Where(x => x != lead && x.StartsWith("c:")).Select(x => "[" + x.Substring(2) + "]").ToList(); return o.Count == 0 ? "" : " (allies " + string.Join(" ", o) + " can join)"; }
+            Server.Broadcast(Tag + $"Attack side: {raid.AttL}{side(raid.AttSide, att)}  ·  Defend side: {raid.DefL}{side(raid.DefSide, def)}. Every attacking clan that joins in gets an equal share of the bounty.");
             Server.Broadcast(Tag + $"<color=#ff5a4a>RAID STARTED:</color> {raid.AttL} is raiding {raid.DefL}'s base at {raid.Grid}. {RaidMinutes:0} min - break the TC, then hold the bubble to capture it. The red bubble is the core round the TC; nobody else can fight anywhere in the base.");
             foreach (var u in tc.authorizedPlayers) { var op = BasePlayer.FindByID(u); if (op != null && op.IsConnected) op.ChatMessage(Tag + $"<color=#ff5a4a>Your base at {raid.Grid} is being raided by {raid.AttL}.</color> Keep your TC alive for {RaidMinutes:0} min - if it breaks, get inside the purple bubble to stop the capture."); }
             Puts($"raid started: {raid.AttL} ({atk.displayName}) on {raid.DefL} at {raid.Grid}");
@@ -187,8 +200,8 @@ namespace Oxide.Plugins
             KillRaidDome(r);
             if (attackersWon)
             {
-                Server.Broadcast(Tag + $"<color=#ff5a4a>RAID WON:</color> {r.AttL} captured {r.DefL}'s base at {r.Grid}.");
-                Interface.CallHook("OnEchoRaidWon", r.DefTag, r.AttTag, r.AttL);
+                Server.Broadcast(Tag + $"<color=#ff5a4a>RAID WON:</color> {(r.Joined.Count > 1 ? string.Join(" + ", r.Joined.Select(x => "[" + x + "]")) : r.AttL)} captured {r.DefL}'s base at {r.Grid}.");
+                Interface.CallHook("OnEchoRaidWon", r.DefTag, string.Join(",", r.Joined.Where(x => !string.IsNullOrEmpty(x)).ToArray()), r.AttL);
                 Interface.CallHook("OnEchoBubbleCaptureWon", r.Tc.ToString(), "p:" + r.AttU, "p:" + r.DefU, new List<ulong> { r.AttU });
             }
             else
@@ -437,7 +450,7 @@ namespace Oxide.Plugins
             if (state == State.Raid && de.buildingID != 0)
             {
                 Raid live;
-                if (raidByB.TryGetValue(de.buildingID, out live)) { if (atk != null && !InRaid(live, atk)) { TellLocked(atk, live); return true; } }
+                if (raidByB.TryGetValue(de.buildingID, out live)) { if (atk != null && !InRaid(live, atk)) { TellLocked(atk, live); return true; } if (atk != null && OnAttack(live, atk)) Join(live, atk); }
                 else if (Cooling(de.buildingID)) { blocked++; if (atk != null) atk.ChatMessage(Tag + "This base just held off a raid - it's rebuilding under a bubble."); return true; }
                 else if (atk != null && info.damageTypes.Has(Rust.DamageType.Explosion)) TryStartRaid(de, atk);
             }
@@ -495,7 +508,7 @@ namespace Oxide.Plugins
             Raid mine = state == State.Raid ? raidByB.Values.FirstOrDefault(r => InRaid(r, p)) : null;
             if (mine != null)
             {
-                bool att = GroupOf(p) == mine.Att; float left = mine.Ends - Time.realtimeSinceStartup;
+                bool att = OnAttack(mine, p); float left = mine.Ends - Time.realtimeSinceStartup;
                 if (mine.Capturing)
                 {
                     int pct = Mathf.RoundToInt(mine.Progress * 100f);
@@ -543,7 +556,7 @@ namespace Oxide.Plugins
         private void CStatus(ConsoleSystem.Arg a)
         {
             if (a.Connection != null && !a.IsAdmin) return;
-            a.ReplyWith($"EchoRaidHours 1.6.0: {raidByB.Count} raid(s) live | {state} (mode {force}), {domes.Count} bubbles up ({purpleUp} purple, lake {LakePhaseNow()})" + (secsLeft > 0 ? $" ({Fmt(secsLeft)})" : "") + $" | hours {Hours()} | since load: {blocked} hits blocked, {halved} offline-halved");
+            a.ReplyWith($"EchoRaidHours 1.7.0: {raidByB.Count} raid(s) live | {state} (mode {force}), {domes.Count} bubbles up ({purpleUp} purple, lake {LakePhaseNow()})" + (secsLeft > 0 ? $" ({Fmt(secsLeft)})" : "") + $" | hours {Hours()} | since load: {blocked} hits blocked, {halved} offline-halved");
         }
     }
 }

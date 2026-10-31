@@ -29,7 +29,7 @@ using Oxide.Game.Rust.Cui;
 
 namespace Oxide.Plugins
 {
-    [Info("EchoBountyTeams", "Echo 10X", "1.5.0")]
+    [Info("EchoBountyTeams", "Echo 10X", "1.6.0")]
     [Description("Automatic bounty teams: top 10 clans with 10+ players, locked each bounty window, base markers and a raid log.")]
     public class EchoBountyTeams : RustPlugin
     {
@@ -267,8 +267,33 @@ namespace Oxide.Plugins
         private void OnEchoRaidWon(string victim, string winner, string who)
         {
             if (string.IsNullOrEmpty(victim)) return;
-            Log($"RAID: [{winner}] CAPTURED [{victim}]'s base ({who})");
-            Payout(victim, winner, who); markerSnap = "";
+            // 1.6.0 (Nick, 1 Nov): winner can be "A,B,C" - allied clans that raided together split the bounty equally
+            var ws = (winner ?? "").Split(',').Select(x => x.Trim()).Where(x => x.Length > 0 && !string.Equals(x, victim, StringComparison.OrdinalIgnoreCase)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            Log($"RAID: [{string.Join("] + [", ws)}] CAPTURED [{victim}]'s base ({who})");
+            if (ws.Count <= 1) Payout(victim, ws.Count == 1 ? ws[0] : null, who);
+            else PayoutSplit(victim, ws);
+            markerSnap = "";
+        }
+        private void PayoutSplit(string victim, List<string> ws)
+        {
+            if (bank.Losses == null) bank.Losses = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            int strikes = StrikesOf(victim) + 1;
+            int bal = MoneyOf(victim), amt = strikes >= 2 ? bal : HalfOf(bal);
+            bank.Losses[victim] = strikes; foreach (var w in ws) bank.Losses[w] = 0;
+            string names = string.Join(" + ", ws.Select(w => $"<color=#ffd27f>[{w}]</color>"));
+            if (amt <= 0) { Server.Broadcast(Tag + $"{names} raided <color=#ffd27f>[{victim}]</color>, but [{victim}] has no bounty money left."); SaveBank(); return; }
+            bank.Money[victim] = bal - amt;
+            int share = amt / ws.Count, extra = amt - share * ws.Count;
+            for (int i = 0; i < ws.Count; i++)
+            {
+                int give = share + (i == 0 ? extra : 0);
+                bank.Money[ws[i]] = MoneyOf(ws[i]) + give;
+                bank.Claims.Add(new Claim { From = victim, To = ws[i], Amount = give, At = DateTime.UtcNow.ToString("u"), Open = false });
+            }
+            if (bank.Claims.Count > 500) bank.Claims.RemoveRange(0, bank.Claims.Count - 500);
+            SaveBank(); pushed.Clear(); SyncPrices();
+            Log($"BOUNTY: {string.Join(" + ", ws)} raided [{victim}] together and split ${amt} of ${bal} ({ws.Count} ways, ${share} each, loss {strikes})");
+            Server.Broadcast(Tag + $"{names} captured <color=#ffd27f>[{victim}]</color>'s base together and split <color=#ffd27f>${amt}</color> - <color=#ffd27f>${share}</color> each" + (strikes >= 2 ? $". [{victim}] is OUT (2 raids lost)." : "."));
         }
         // 1.2.0: the money. victim = clan whose TC died, winner = attacking clan (null = no clan, nobody is paid)
         private void Payout(string victim, string winner, string who)
