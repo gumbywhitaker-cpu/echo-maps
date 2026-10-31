@@ -28,11 +28,11 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("EchoRaidHours", "Echo 10X", "1.4.0")]
+    [Info("EchoRaidHours", "Echo 10X", "1.4.1")]
     [Description("Simple raid hours: every base protected outside raid hours, offline protection inside them.")]
     public class EchoRaidHours : RustPlugin
     {
-        [PluginReference] private Plugin EchoTC, EchoClans, EchoBountyLake;
+        [PluginReference] private Plugin EchoTC, EchoClans, EchoBountyLake, EchoRaidBase;
         private const float GraceMinutes = 60f, OfflineMinutes = 10f, OfflineScale = 0.5f;
         private const string Ui = "EchoRaidHours.Banner";
         private const string Tag = "<color=#39d2d1>ECHO</color> ";
@@ -442,6 +442,9 @@ namespace Oxide.Plugins
 
         private void CmdRaid(BasePlayer p, string command, string[] args)
         {
+            // 1.4.1: /raid is shared with EchoRaidBase (the scientist raid-base event) - its words go straight to it
+            string w0 = args.Length > 0 ? args[0].ToLowerInvariant() : "";
+            if (EchoRaidBase != null && (w0 == "tp" || w0 == "go" || w0 == "join" || w0 == "start" || w0 == "force" || w0 == "stop")) { EchoRaidBase.Call("CmdRaid", p, "raid", args); return; }
             if (args.Length > 0 && args[0].ToLowerInvariant() == "hide") { uiOff.Add(p.userID); CuiHelper.DestroyUi(p, Ui); p.ChatMessage(Tag + "Raid banner hidden. /raid show brings it back."); return; }
             if (args.Length > 0 && args[0].ToLowerInvariant() == "show") { uiOff.Remove(p.userID); Banner(p); return; }
             string now = state == State.Grace ? $"WIPE GRACE (raiding opens in {Fmt(secsLeft)})" : state == State.Raid ? "RAID HOURS LIVE" + (secsLeft > 0 ? $" ({Fmt(secsLeft)} left)" : "") : state == State.Ffa ? "FREE FOR ALL" : "BASES PROTECTED" + (secsLeft > 0 ? $" (raids open in {Fmt(secsLeft)})" : "");
@@ -450,13 +453,14 @@ namespace Oxide.Plugins
                 "In raid hours, the first rocket/C4 on a clan base starts a 45 min raid: red bubble, only those two clans can fight inside. Destroy the TC to win the bounty; if it survives, the defenders win and get a 30 min rebuild bubble.\n" +
                 "A base where everyone is offline (10+ min) takes half damage.\n" +
                 "First hour after wipe is grace. Free-for-all after the bounty days: raid any time.\n/raid hide | /raid show - the banner");
+            try { var rb = EchoRaidBase?.Call("StatusLine") as string; if (!string.IsNullOrEmpty(rb)) p.ChatMessage("<color=#3ddcea>RAID BASE EVENT</color> " + rb + " (/raid join)"); } catch { }
         }
 
         [ConsoleCommand("raidhours.status")]
         private void CStatus(ConsoleSystem.Arg a)
         {
             if (a.Connection != null && !a.IsAdmin) return;
-            a.ReplyWith($"EchoRaidHours 1.4.0: {raidByB.Count} raid(s) live | {state} (mode {force}), {domes.Count} bubbles up ({purpleUp} purple, lake {LakePhaseNow()})" + (secsLeft > 0 ? $" ({Fmt(secsLeft)})" : "") + $" | hours {Hours()} | since load: {blocked} hits blocked, {halved} offline-halved");
+            a.ReplyWith($"EchoRaidHours 1.4.1: {raidByB.Count} raid(s) live | {state} (mode {force}), {domes.Count} bubbles up ({purpleUp} purple, lake {LakePhaseNow()})" + (secsLeft > 0 ? $" ({Fmt(secsLeft)})" : "") + $" | hours {Hours()} | since load: {blocked} hits blocked, {halved} offline-halved");
         }
     }
 }
