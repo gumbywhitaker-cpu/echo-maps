@@ -23,7 +23,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("EchoRaidHours", "Echo 10X", "1.2.0")]
+    [Info("EchoRaidHours", "Echo 10X", "1.2.1")]
     [Description("Simple raid hours: every base protected outside raid hours, offline protection inside them.")]
     public class EchoRaidHours : RustPlugin
     {
@@ -121,6 +121,16 @@ namespace Oxide.Plugins
             return m == "auto" ? "AUTO: raid hours follow the schedule again." : m == "raid" ? "RAID NOW: every base can be raided until you switch back to AUTO." : m == "protect" ? "PROTECT ALL: every base is protected until you switch back to AUTO." : "FREE FOR ALL: raid any time until you switch back to AUTO.";
         }
 
+        // API for Echo Command's Raid page (one simple page instead of the old Shields + Raid pages)
+        private string API_Set(string mode, string by) => SetMode(mode, by ?? "staff");
+        private Dictionary<string, object> API_Status() => new Dictionary<string, object>
+        {
+            ["state"] = state == State.Grace ? "WIPE GRACE" : state == State.Raid ? "RAID HOURS LIVE" : state == State.Ffa ? "FREE FOR ALL" : "BASES PROTECTED",
+            ["raidable"] = state == State.Raid || state == State.Ffa,
+            ["time"] = secsLeft > 0 && state != State.Ffa ? Fmt(secsLeft) + (state == State.Raid ? " left" : " to go") : "",
+            ["mode"] = force == "bounty" ? "RAID NOW" : force == "peace" ? "PROTECT ALL" : force == "ffa" ? "FREE FOR ALL" : "AUTO",
+            ["bubbles"] = domes.Count, ["purple"] = purpleUp, ["hours"] = Hours()
+        };
         private readonly HashSet<ulong> panelOpen = new HashSet<ulong>();
         private void RefreshPanel(BasePlayer p) { if (panelOpen.Contains((ulong)p.userID)) OpenPanel(p); }
 
@@ -290,7 +300,7 @@ namespace Oxide.Plugins
         private void CStatus(ConsoleSystem.Arg a)
         {
             if (a.Connection != null && !a.IsAdmin) return;
-            a.ReplyWith($"EchoRaidHours 1.1.0: {state} (mode {force}), {domes.Count} bubbles up ({purpleUp} purple, lake {LakePhaseNow()})" + (secsLeft > 0 ? $" ({Fmt(secsLeft)})" : "") + $" | hours {Hours()} | since load: {blocked} hits blocked, {halved} offline-halved");
+            a.ReplyWith($"EchoRaidHours 1.2.1: {state} (mode {force}), {domes.Count} bubbles up ({purpleUp} purple, lake {LakePhaseNow()})" + (secsLeft > 0 ? $" ({Fmt(secsLeft)})" : "") + $" | hours {Hours()} | since load: {blocked} hits blocked, {halved} offline-halved");
         }
     }
 }
