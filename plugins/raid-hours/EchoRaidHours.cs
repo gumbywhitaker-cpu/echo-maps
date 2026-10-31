@@ -28,7 +28,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("EchoRaidHours", "Echo 10X", "1.4.1")]
+    [Info("EchoRaidHours", "Echo 10X", "1.4.2")]
     [Description("Simple raid hours: every base protected outside raid hours, offline protection inside them.")]
     public class EchoRaidHours : RustPlugin
     {
@@ -104,6 +104,7 @@ namespace Oxide.Plugins
             ulong defU = tc.OwnerID; string defTag = TagOf(defU);
             if (string.IsNullOrEmpty(defTag)) foreach (var u in tc.authorizedPlayers) { defTag = TagOf(u); if (!string.IsNullOrEmpty(defTag)) { defU = u; break; } }
             if (string.IsNullOrEmpty(defTag)) return;                                   // not a clan base: plain raiding, no raid event
+            if (string.IsNullOrEmpty(TagOf(atk.userID))) return;                          // 1.4.2: natty pop (no clan) raids the normal way - only clan vs clan starts a raid event
             string att = GroupOf(atk), def = "c:" + defTag.ToUpperInvariant();
             if (att == def) return;
             Vector3 c; float r; Shape(tc, out c, out r);
@@ -450,7 +451,7 @@ namespace Oxide.Plugins
             string now = state == State.Grace ? $"WIPE GRACE (raiding opens in {Fmt(secsLeft)})" : state == State.Raid ? "RAID HOURS LIVE" + (secsLeft > 0 ? $" ({Fmt(secsLeft)} left)" : "") : state == State.Ffa ? "FREE FOR ALL" : "BASES PROTECTED" + (secsLeft > 0 ? $" (raids open in {Fmt(secsLeft)})" : "");
             p.ChatMessage(Tag + $"<color=#ffd27f>RAIDING</color>\nRight now: {now}\nRaid hours: {Hours()}\n" +
                 "Outside raid hours every base is protected and shows a blue bubble - no registering needed.\n" +
-                "In raid hours, the first rocket/C4 on a clan base starts a 45 min raid: red bubble, only those two clans can fight inside. Destroy the TC to win the bounty; if it survives, the defenders win and get a 30 min rebuild bubble.\n" +
+                "In raid hours, a clan's first rocket/C4 on another clan's base starts a 45 min raid: red bubble, only those two clans can fight inside. Players without a clan raid the normal way. Destroy the TC to win the bounty; if it survives, the defenders win and get a 30 min rebuild bubble.\n" +
                 "A base where everyone is offline (10+ min) takes half damage.\n" +
                 "First hour after wipe is grace. Free-for-all after the bounty days: raid any time.\n/raid hide | /raid show - the banner");
             try { var rb = EchoRaidBase?.Call("StatusLine") as string; if (!string.IsNullOrEmpty(rb)) p.ChatMessage("<color=#3ddcea>RAID BASE EVENT</color> " + rb + " (/raid join)"); } catch { }
@@ -460,7 +461,7 @@ namespace Oxide.Plugins
         private void CStatus(ConsoleSystem.Arg a)
         {
             if (a.Connection != null && !a.IsAdmin) return;
-            a.ReplyWith($"EchoRaidHours 1.4.1: {raidByB.Count} raid(s) live | {state} (mode {force}), {domes.Count} bubbles up ({purpleUp} purple, lake {LakePhaseNow()})" + (secsLeft > 0 ? $" ({Fmt(secsLeft)})" : "") + $" | hours {Hours()} | since load: {blocked} hits blocked, {halved} offline-halved");
+            a.ReplyWith($"EchoRaidHours 1.4.2: {raidByB.Count} raid(s) live | {state} (mode {force}), {domes.Count} bubbles up ({purpleUp} purple, lake {LakePhaseNow()})" + (secsLeft > 0 ? $" ({Fmt(secsLeft)})" : "") + $" | hours {Hours()} | since load: {blocked} hits blocked, {halved} offline-halved");
         }
     }
 }
