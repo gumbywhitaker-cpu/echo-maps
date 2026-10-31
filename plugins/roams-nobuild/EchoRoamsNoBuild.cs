@@ -12,7 +12,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("EchoRoamsNoBuild", "Echo 10X", "1.1.0")]
+    [Info("EchoRoamsNoBuild", "Echo 10X", "1.1.1")]
     [Description("Roam Island rules: no building, no kits, no shotgun/boom crafting, /roamst.")]
     public class EchoRoamsNoBuild : RustPlugin
     {
@@ -48,10 +48,13 @@ namespace Oxide.Plugins
         {
             var p = planner?.GetOwnerPlayer();
             if (p == null || Admin(p)) return null;
+            // 1.1.1: fighting cover is allowed - high external walls, gates and barricades. Only real bases are blocked.
+            var fn = prefab?.fullName ?? "";
+            if (fn.Contains("wall.external.high") || fn.Contains("gates.external.high") || fn.Contains("barricade")) return null;
             Vector3 pos = target.entity != null ? target.entity.transform.position : target.position;
             if (!OnIsland(pos) && !OnIsland(p.transform.position)) return null;
             blocked++;
-            p.ChatMessage(Tag + "No building on <color=#ffd27f>Roam Island</color> - it's an event arena.");
+            p.ChatMessage(Tag + "No bases on <color=#ffd27f>Roam Island</color> - high walls and barricades for cover are fine.");
             return false;
         }
 
