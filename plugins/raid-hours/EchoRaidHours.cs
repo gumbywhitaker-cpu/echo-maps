@@ -80,7 +80,7 @@ namespace Oxide.Plugins
             foreach (var r in raidByB.Values) { var d = pos - r.C; d.y = 0f; if (d.magnitude <= r.R) return r; }
             return null;
         }
-        private static string Grid(Vector3 pos)
+        private static string GridOf(Vector3 pos)
         {
             float size = TerrainMeta.Size.x; int cells = Mathf.Max(1, Mathf.FloorToInt(size / 146.3f)); float cell = size / cells;
             int x = Mathf.Clamp(Mathf.FloorToInt((pos.x + size / 2f) / cell), 0, cells - 1), z = Mathf.Clamp(Mathf.FloorToInt((size / 2f - pos.z) / cell), 0, cells - 1);
@@ -107,7 +107,7 @@ namespace Oxide.Plugins
             string att = GroupOf(atk), def = "c:" + defTag.ToUpperInvariant();
             if (att == def) return;
             Vector3 c; float r; Shape(tc, out c, out r);
-            var raid = new Raid { B = tc.buildingID, Tc = tc.net.ID.Value, C = c, R = r, Att = att, AttL = LabelOf(atk), Def = def, DefL = "[" + defTag + "]", AttU = atk.userID, DefU = defU, Ends = Time.realtimeSinceStartup + RaidMinutes * 60f, Grid = Grid(c) };
+            var raid = new Raid { B = tc.buildingID, Tc = tc.net.ID.Value, C = c, R = r, Att = att, AttL = LabelOf(atk), Def = def, DefL = "[" + defTag + "]", AttU = (ulong)atk.userID, DefU = defU, Ends = Time.realtimeSinceStartup + RaidMinutes * 60f, Grid = GridOf(c) };
             raidByB[raid.B] = raid;
             Server.Broadcast(Tag + $"<color=#ff5a4a>RAID STARTED:</color> {raid.AttL} is raiding {raid.DefL}'s base at {raid.Grid}. {RaidMinutes:0} min - destroy the TC to win. Only those two can fight inside the red bubble.");
             foreach (var u in tc.authorizedPlayers) { var op = BasePlayer.FindByID(u); if (op != null && op.IsConnected) op.ChatMessage(Tag + $"<color=#ff5a4a>Your base at {raid.Grid} is being raided by {raid.AttL}.</color> Keep your TC alive for {RaidMinutes:0} min to win."); }
