@@ -145,7 +145,6 @@ namespace Oxide.Plugins
                 var l = GameManager.server.CreateEntity(CodeLockPrefab, UnityEngine.Vector3.zero, UnityEngine.Quaternion.identity) as CodeLock;
                 if (l == null) return;
                 l.OwnerID = p.userID;
-                l.gameObject.Identity();
                 l.SetParent(door, door.GetSlotAnchorName(BaseEntity.Slot.Lock));
                 l.Spawn();
                 door.SetSlot(BaseEntity.Slot.Lock, l);
