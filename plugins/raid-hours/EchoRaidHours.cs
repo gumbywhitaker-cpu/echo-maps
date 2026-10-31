@@ -1,3 +1,5 @@
+// EchoRaidHours 1.2.0 (Nick, 31 Oct): Bounty Lake purple hour is back - in the first hour of each raid window
+//   (EchoBountyLake's daily times) bases at the lake get a PURPLE bubble: raidable, and EchoBountyLake boosts the damage.
 // EchoRaidHours 1.1.0 (Nick, 31 Oct 2026): the WHOLE raid system, simple enough for anyone.
 //   AUTO: protected bases get a blue bubble (green during wipe grace); every bubble drops when raid hours start.
 //   MANUAL: /raidadmin opens a panel with 4 big buttons - AUTO, RAID NOW, PROTECT ALL, FREE FOR ALL
@@ -21,11 +23,11 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("EchoRaidHours", "Echo 10X", "1.1.0")]
+    [Info("EchoRaidHours", "Echo 10X", "1.2.0")]
     [Description("Simple raid hours: every base protected outside raid hours, offline protection inside them.")]
     public class EchoRaidHours : RustPlugin
     {
-        [PluginReference] private Plugin EchoTC, EchoClans;
+        [PluginReference] private Plugin EchoTC, EchoClans, EchoBountyLake;
         private const float GraceMinutes = 60f, OfflineMinutes = 10f, OfflineScale = 0.5f;
         private const string Ui = "EchoRaidHours.Banner";
         private const string Tag = "<color=#39d2d1>ECHO</color> ";
@@ -49,22 +51,27 @@ namespace Oxide.Plugins
         // ================= bubbles =================
         private const string Blue = "assets/bundled/prefabs/modding/events/twitch/br_sphere.prefab";
         private const string Green = "assets/bundled/prefabs/modding/events/twitch/br_sphere_green.prefab";
+        private const string Purple = "assets/bundled/prefabs/modding/events/twitch/br_sphere_purple.prefab";
+        private int purpleUp;
+        private string LakePhase(Vector3 pos) { try { return EchoBountyLake?.Call("API_LakePhase", pos) as string; } catch { return null; } }
         private class Dome { public List<SphereEntity> Spheres = new List<SphereEntity>(); public Vector3 Centre; public float Radius; public string Prefab; }
         private readonly Dictionary<ulong, Dome> domes = new Dictionary<ulong, Dome>();
         private int Layers = 2, MinPieces = 5;
 
         private void Bubbles()
         {
-            bool want = state == State.Grace || state == State.Protected;
-            if (!want) { if (domes.Count > 0) KillAllDomes(); return; }
-            string prefab = state == State.Grace ? Green : Blue;
-            var seen = new HashSet<ulong>();
+            bool shield = state == State.Grace || state == State.Protected;
+            if (state == State.Ffa) { if (domes.Count > 0) KillAllDomes(); purpleUp = 0; return; }
+            var seen = new HashSet<ulong>(); int purples = 0;
             foreach (var tc in BaseNetworkable.serverEntities.OfType<BuildingPrivlidge>().ToList())
             {
                 if (tc == null || tc.IsDestroyed || tc.net == null || tc.OwnerID == 0UL || !tc.OwnerID.IsSteamId()) continue;
                 var b = tc.GetBuilding(); var blocks = b?.buildingBlocks;
                 if (blocks == null || blocks.Count < MinPieces) continue;
-                ulong id = tc.net.ID.Value; seen.Add(id);
+                // raid hours: only Bounty Lake bases in their purple hour get a (purple) bubble; protected: blue / green in grace
+                string prefab = shield ? (state == State.Grace ? Green : Blue) : (LakePhase(tc.transform.position) == "purple" ? Purple : null);
+                if (prefab == null) continue;
+                ulong id = tc.net.ID.Value; seen.Add(id); if (prefab == Purple) purples++;
                 Vector3 c = Vector3.zero; int n = 0; foreach (var bl in blocks) { if (bl == null) continue; c += bl.transform.position; n++; }
                 if (n == 0) continue; c /= n;
                 float r = 0f; foreach (var bl in blocks) { if (bl == null) continue; var d = bl.transform.position - c; d.y = 0f; r = Mathf.Max(r, d.magnitude); }
@@ -72,6 +79,8 @@ namespace Oxide.Plugins
                 Dome dm;
                 if (domes.TryGetValue(id, out dm) && dm.Prefab == prefab && Mathf.Abs(dm.Radius - r) < 2f && (dm.Centre - c).sqrMagnitude < 4f && dm.Spheres.All(x => x != null && !x.IsDestroyed)) continue;
                 if (dm != null) Kill(dm);
+                if (prefab == Purple && (dm == null || dm.Prefab != Purple))
+                    foreach (var uid in tc.authorizedPlayers) { var op = BasePlayer.FindByID(uid); if (op != null && op.IsConnected) op.ChatMessage(Tag + "<color=#b05cff>PURPLE HOUR - DOUBLE DAMAGE:</color> your Bounty Lake base can be raided and takes boosted raid damage for the next hour."); }
                 dm = new Dome { Centre = c, Radius = r, Prefab = prefab };
                 for (int i = 0; i < Layers; i++)
                 {
@@ -83,7 +92,9 @@ namespace Oxide.Plugins
                 domes[id] = dm;
             }
             foreach (var k in domes.Keys.Where(k => !seen.Contains(k)).ToList()) { Kill(domes[k]); domes.Remove(k); }
+            purpleUp = purples;
         }
+        private string LakePhaseNow() { try { var o = EchoBountyLake?.Call("API_LakePhase", Vector3.zero); } catch { } return EchoBountyLake == null ? "plugin off" : "on"; }
         private static void Kill(Dome d) { foreach (var s in d.Spheres) if (s != null && !s.IsDestroyed) s.Kill(); d.Spheres.Clear(); }
         private void KillAllDomes() { foreach (var d in domes.Values) Kill(d); domes.Clear(); }
 
@@ -279,7 +290,7 @@ namespace Oxide.Plugins
         private void CStatus(ConsoleSystem.Arg a)
         {
             if (a.Connection != null && !a.IsAdmin) return;
-            a.ReplyWith($"EchoRaidHours 1.1.0: {state} (mode {force}), {domes.Count} bubbles up" + (secsLeft > 0 ? $" ({Fmt(secsLeft)})" : "") + $" | hours {Hours()} | since load: {blocked} hits blocked, {halved} offline-halved");
+            a.ReplyWith($"EchoRaidHours 1.1.0: {state} (mode {force}), {domes.Count} bubbles up ({purpleUp} purple, lake {LakePhaseNow()})" + (secsLeft > 0 ? $" ({Fmt(secsLeft)})" : "") + $" | hours {Hours()} | since load: {blocked} hits blocked, {halved} offline-halved");
         }
     }
 }
