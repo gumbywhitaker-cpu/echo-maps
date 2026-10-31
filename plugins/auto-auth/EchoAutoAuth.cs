@@ -129,7 +129,7 @@ namespace Oxide.Plugins
             l.code = code;
             l.hasCode = true;
             if (!l.whitelistPlayers.Contains(owner)) l.whitelistPlayers.Add(owner);
-            l.SetFlag(BaseEntity.Flags.Locked, true);
+            using (var f = l.StartSetFlags(BaseEntity.FlagsUpdateMode.SendNetworkUpdate)) f.Set(BaseEntity.Flags.Locked, true);
             l.SendNetworkUpdate(); codes++;
             var p = BasePlayer.FindByID(owner);
             p?.ChatMessage($"<color=#39d2d1>ECHO</color> Code lock set and locked. Code: <color=#ffd27f>{code}</color> - your clan and team can open it.");
