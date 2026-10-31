@@ -1,3 +1,6 @@
+// EchoAutoAuth 2.1.0 (Nick, 1 Nov 2026): every door (doors, double doors, hatches, garage doors, high external gates) gets a
+//   free code lock the moment it's placed, locked with the owner's own code (same code on all their doors) and opened by
+//   their clan + team. The code is told once in chat (and again with /mycode).
 // EchoAutoAuth 2.0.0 (Nick, 31 Oct 2026): access follows your CLAN (and team), not individual players.
 //   - Tool cupboards, auto turrets and code locks placed by a player are shared with everyone in their clan and team.
 //   - Join the clan/team -> you're added to all of them. Leave or get kicked -> you're taken off all of them.
@@ -11,12 +14,12 @@ using Oxide.Core.Plugins;
 
 namespace Oxide.Plugins
 {
-    [Info("EchoAutoAuth", "Echo 10X", "2.0.0")]
+    [Info("EchoAutoAuth", "Echo 10X", "2.1.0")]
     [Description("Clan/team-based access to TCs, turrets and code locks, plus auto code locks.")]
     public class EchoAutoAuth : RustPlugin
     {
         [PluginReference] private Plugin EchoClans;
-        private class Store { public Dictionary<ulong, HashSet<ulong>> Added = new Dictionary<ulong, HashSet<ulong>>(); } // entity net id -> players we added
+        private class Store { public Dictionary<ulong, HashSet<ulong>> Added = new Dictionary<ulong, HashSet<ulong>>(); public Dictionary<ulong, string> Codes = new Dictionary<ulong, string>(); } // entity net id -> players we added
         private Store data;
         private readonly HashSet<BaseEntity> ents = new HashSet<BaseEntity>();
         private int added, removed, codes; private bool dirty, queued;
@@ -26,6 +29,8 @@ namespace Oxide.Plugins
         {
             foreach (var n in BaseNetworkable.serverEntities) Track(n as BaseEntity);
             timer.Every(30f, SyncAll); timer.Every(60f, Save); Queue();
+            if (data.Codes == null) data.Codes = new Dictionary<ulong, string>();
+            cmd.AddChatCommand("mycode", this, nameof(CmdMyCode));
         }
         private void Unload() => Save();
         private void OnNewSave(string f) { data = new Store(); dirty = true; Save(); }
@@ -120,26 +125,63 @@ namespace Oxide.Plugins
             return false;
         }
 
+        // ---------- 2.1.0: free code lock on every door ----------
+        private const string CodeLockPrefab = "assets/prefabs/locks/keypad/lock.code.prefab";
+        private int doorLocks;
+        private readonly Dictionary<ulong, float> toldCode = new Dictionary<ulong, float>();
+        private string CodeFor(ulong owner)
+        {
+            if (data.Codes == null) data.Codes = new Dictionary<ulong, string>();
+            string c; if (!data.Codes.TryGetValue(owner, out c) || string.IsNullOrEmpty(c)) { c = UnityEngine.Random.Range(1000, 10000).ToString(); data.Codes[owner] = c; dirty = true; }
+            return c;
+        }
+        private void OnEntityBuilt(Planner plan, UnityEngine.GameObject go)
+        {
+            var door = go?.ToBaseEntity() as Door; var p = plan?.GetOwnerPlayer();
+            if (door == null || p == null || !((ulong)p.userID).IsSteamId()) return;
+            NextTick(() =>
+            {
+                if (door == null || door.IsDestroyed || !door.HasSlot(BaseEntity.Slot.Lock) || door.GetSlot(BaseEntity.Slot.Lock) != null) return;
+                var l = GameManager.server.CreateEntity(CodeLockPrefab, UnityEngine.Vector3.zero, UnityEngine.Quaternion.identity) as CodeLock;
+                if (l == null) return;
+                l.OwnerID = p.userID;
+                l.gameObject.Identity();
+                l.SetParent(door, door.GetSlotAnchorName(BaseEntity.Slot.Lock));
+                l.Spawn();
+                door.SetSlot(BaseEntity.Slot.Lock, l);
+                doorLocks++;
+            });
+        }
+        private void CmdMyCode(BasePlayer p, string command, string[] args)
+        {
+            if (p == null) return;
+            p.ChatMessage($"<color=#39d2d1>ECHO</color> Your door code: <color=#ffd27f>{CodeFor(p.userID)}</color> (every door you place gets a code lock with it; your clan and team can open them).");
+        }
+
         // ---------- auto code lock ----------
         private void AutoCode(CodeLock l)
         {
             if (l == null || l.IsDestroyed || l.IsLocked() || !string.IsNullOrEmpty(l.code)) return;
             ulong owner = l.OwnerID; if (owner == 0UL || !owner.IsSteamId()) return;
-            var code = UnityEngine.Random.Range(1000, 10000).ToString();
+            var code = CodeFor(owner);
             l.code = code;
             l.hasCode = true;
             if (!l.whitelistPlayers.Contains(owner)) l.whitelistPlayers.Add(owner);
             using (var f = l.StartSetFlags(BaseEntity.FlagsUpdateMode.SendNetworkUpdate)) f.Set(BaseEntity.Flags.Locked, true);
             l.SendNetworkUpdate(); codes++;
-            var p = BasePlayer.FindByID(owner);
-            p?.ChatMessage($"<color=#39d2d1>ECHO</color> Code lock set and locked. Code: <color=#ffd27f>{code}</color> - your clan and team can open it.");
+            var p = BasePlayer.FindByID(owner); float t;
+            if (p != null && (!toldCode.TryGetValue(owner, out t) || UnityEngine.Time.realtimeSinceStartup - t > 600f))
+            {
+                toldCode[owner] = UnityEngine.Time.realtimeSinceStartup;
+                p.ChatMessage($"<color=#39d2d1>ECHO</color> Code lock placed and locked. Code: <color=#ffd27f>{code}</color> (same on all your doors, /mycode) - your clan and team can open it.");
+            }
         }
 
         [ConsoleCommand("autoauth.status")]
         private void CStatus(ConsoleSystem.Arg a)
         {
             if (a.Connection != null && !a.IsAdmin) return;
-            a.ReplyWith($"EchoAutoAuth 2.0.0: on | watching {ents.OfType<BuildingPrivlidge>().Count()} TCs, {ents.OfType<AutoTurret>().Count()} turrets, {ents.OfType<CodeLock>().Count()} code locks | {data.Added.Sum(k => k.Value.Count)} clan/team auths in place | since load: {added} added, {removed} removed, {codes} code locks auto-set");
+            a.ReplyWith($"EchoAutoAuth 2.1.0: on | {doorLocks} door locks auto-placed | watching {ents.OfType<BuildingPrivlidge>().Count()} TCs, {ents.OfType<AutoTurret>().Count()} turrets, {ents.OfType<CodeLock>().Count()} code locks | {data.Added.Sum(k => k.Value.Count)} clan/team auths in place | since load: {added} added, {removed} removed, {codes} code locks auto-set");
         }
     }
 }
