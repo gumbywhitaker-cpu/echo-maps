@@ -111,11 +111,11 @@ namespace Oxide.Plugins
         }
 
         private readonly HashSet<ulong> panelOpen = new HashSet<ulong>();
-        private void RefreshPanel(BasePlayer p) { if (panelOpen.Contains(p.userID)) OpenPanel(p); }
+        private void RefreshPanel(BasePlayer p) { if (panelOpen.Contains((ulong)p.userID)) OpenPanel(p); }
 
         private void OpenPanel(BasePlayer p)
         {
-            CuiHelper.DestroyUi(p, Panel); panelOpen.Add(p.userID);
+            CuiHelper.DestroyUi(p, Panel); panelOpen.Add((ulong)p.userID);
             string now = state == State.Grace ? "WIPE GRACE" : state == State.Raid ? "RAID HOURS LIVE" : state == State.Ffa ? "FREE FOR ALL" : "BASES PROTECTED";
             string col = state == State.Raid || state == State.Ffa ? "1 0.45 0.4 1" : "0.5 1 0.6 1";
             string mode = force == "bounty" ? "RAID NOW (manual)" : force == "peace" ? "PROTECT ALL (manual)" : force == "ffa" ? "FREE FOR ALL (manual)" : "AUTO (schedule)";
@@ -143,7 +143,7 @@ namespace Oxide.Plugins
             if (p != null) p.ChatMessage(Tag + r); else a.ReplyWith(r);
         }
         [ConsoleCommand("raidhours.close")]
-        private void CClose(ConsoleSystem.Arg a) { var p = a.Player(); if (p == null) return; panelOpen.Remove(p.userID); CuiHelper.DestroyUi(p, Panel); }
+        private void CClose(ConsoleSystem.Arg a) { var p = a.Player(); if (p == null) return; panelOpen.Remove((ulong)p.userID); CuiHelper.DestroyUi(p, Panel); }
         private void OnPlayerDisconnected(BasePlayer p) { if (p != null) offlineSince[p.userID] = Time.realtimeSinceStartup; }
         private void OnPlayerConnected(BasePlayer p) { if (p != null) { offlineSince.Remove(p.userID); timer.Once(5f, () => Banner(p)); } }
 
