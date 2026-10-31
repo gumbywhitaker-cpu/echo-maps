@@ -1,4 +1,4 @@
-// EchoSeaFort 2.1.0: everything top tier (armoured). 2.0.0 (Nick, 31 Oct 2026): sea fortress base owned by Arki (Nick) - a normal raidable base.
+// EchoSeaFort 3.0.0: foundations on the sea floor, built up from there. 2.1.0: everything top tier (armoured). 2.0.0 (Nick, 31 Oct 2026): sea fortress base owned by Arki (Nick) - a normal raidable base.
 //   - Tall tiered sheet-metal keep: 8x8 -> 6x6 -> 4x4 -> 2x2 tiers (7 storeys, ~25 m), battlements on every step,
 //     four corner turrets on the first roof, spiral stairs all the way up, armoured front door + code lock, stocked TC.
 //   - Double-height stone ring wall standing in the sea, with four 2x2 towers built into the ring (3 storeys).
@@ -14,7 +14,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("EchoSeaFort", "Echo 10X", "2.2.0")]
+    [Info("EchoSeaFort", "Echo 10X", "3.0.0")]
     [Description("Builds the sea fortress base for Arki.")]
     public class EchoSeaFort : RustPlugin
     {
@@ -123,9 +123,39 @@ namespace Oxide.Plugins
         }
 
         // ---------- plan ----------
-        // 2.2.0: armoured skirt walls under every outer edge, from below the waterline up to the deck, so nothing floats
-        private const float SkirtY = DeckY - LevelH;
-        private void Skirt(float ox, float oz, int n) => Perimeter(ox, oz, n, SkirtY, k => PWall);
+        // 3.0.0: built like a real sea base - foundations sit on the sea floor and walls + floors stack up to the deck.
+        private float BedMin(float ox, float oz, int nx, int nz)
+        {
+            float hx = nx * Cell / 2f, hz = nz * Cell / 2f, m = 99f;
+            for (float x = -hx; x <= hx + 0.01f; x += 1.5f) for (float z = -hz; z <= hz + 0.01f; z += 1.5f) m = Mathf.Min(m, Ground(c.x + ox + x, c.z + oz + z));
+            return m;
+        }
+        private void Base(float ox, float oz, int nx, int nz)
+        {
+            float bed = BedMin(ox, oz, nx, nz);
+            int k = Mathf.Max(0, Mathf.CeilToInt((DeckY - bed) / LevelH - 0.001f));
+            float yF = DeckY - k * LevelH, offx = (nx - 1) * Cell / 2f, offz = (nz - 1) * Cell / 2f, h = Cell / 2f;
+            for (int i = 0; i < nx; i++) for (int j = 0; j < nz; j++) Q(PFound, Cxz(ox - offx + i * Cell, oz - offz + j * Cell, yF), Quaternion.identity);
+            for (int l = 0; l < k; l++)
+            {
+                float y = yF + l * LevelH;
+                for (int i = 0; i < nx; i++)
+                {
+                    float x = ox - offx + i * Cell;
+                    Q(PWall, Cxz(x, oz - offz - h, y), Yaw(90f));
+                    Q(PWall, Cxz(x, oz + offz + h, y), Yaw(-90f));
+                }
+                for (int j = 0; j < nz; j++)
+                {
+                    float z = oz - offz + j * Cell;
+                    Q(PWall, Cxz(ox - offx - h, z, y), Yaw(180f));
+                    Q(PWall, Cxz(ox + offx + h, z, y), Yaw(0f));
+                }
+                for (int i = 0; i < nx; i++) for (int j = 0; j < nz; j++) Q(PFloor, Cxz(ox - offx + i * Cell, oz - offz + j * Cell, y + LevelH), Quaternion.identity);
+            }
+            stacked += k;
+        }
+        private int stacked;
 
         private void Plan()
         {
@@ -156,8 +186,7 @@ namespace Oxide.Plugins
         {
             const int n = 2, levels = 3;
             float off = (n - 1) * Cell / 2f;
-            for (int i = 0; i < n; i++) for (int j = 0; j < n; j++) Q(PFound, Cxz(ox - off + i * Cell, oz - off + j * Cell, DeckY), Quaternion.identity);
-            Skirt(ox, oz, n);
+            Base(ox, oz, n, n);
             float sx = ox - off, sz = oz - off;   // stairs cell
             for (int lv = 0; lv < levels; lv++)
             {
@@ -178,8 +207,7 @@ namespace Oxide.Plugins
             int total = tiers.Sum(t => t[1]);
             float sx = -Cell / 2f, sz = -Cell / 2f;   // stairs cell - inside every tier
             float off8 = 7 * Cell / 2f;
-            for (int i = 0; i < 8; i++) for (int j = 0; j < 8; j++) Q(PFound, Cxz(-off8 + i * Cell, -off8 + j * Cell, DeckY), Quaternion.identity);
-            Skirt(0f, 0f, 8);
+            Base(0f, 0f, 8, 8);
             int lv = 0;
             for (int t = 0; t < tiers.Length; t++)
             {
@@ -229,19 +257,18 @@ namespace Oxide.Plugins
             // walkway from the keep door (south) to a dock beside the boat gate, low walls as railings, steps into the water
             float start = -(7 * Cell / 2f) - Cell, end = -(RingR - 6f);
             float x0 = Cell / 2f;
-            for (float z = start; z >= end; z -= Cell)
+            int L = Mathf.FloorToInt((start - end) / Cell) + 1;
+            Base(x0 - Cell / 2f, start - (L - 1) * Cell / 2f, 2, L);
+            for (int i = 0; i < L; i++)
             {
-                Q(PFound, Cxz(x0, z, DeckY), Quaternion.identity, BuildingGrade.Enum.TopTier);
-                Q(PFound, Cxz(x0 - Cell, z, DeckY), Quaternion.identity, BuildingGrade.Enum.TopTier);
-                Q(PLow, Cxz(x0 + Cell / 2f, z, DeckY), Yaw(0f), BuildingGrade.Enum.TopTier);
-                Q(PLow, Cxz(x0 - Cell - Cell / 2f, z, DeckY), Yaw(180f), BuildingGrade.Enum.TopTier);
-                Q(PWall, Cxz(x0 + Cell / 2f, z, SkirtY), Yaw(0f));
-                Q(PWall, Cxz(x0 - Cell - Cell / 2f, z, SkirtY), Yaw(180f));
+                float z = start - i * Cell;
+                Q(PLow, Cxz(x0 + Cell / 2f, z, DeckY), Yaw(0f));
+                Q(PLow, Cxz(x0 - Cell - Cell / 2f, z, DeckY), Yaw(180f));
             }
+            end = start - (L - 1) * Cell;
             // dock platform 4 wide at the end + steps down to the water on both sides
             float dz = end - Cell;
-            for (int i = 0; i < 4; i++) { float x = x0 - 3f * Cell + i * Cell; Q(PWall, Cxz(x, dz - Cell / 2f, SkirtY), Yaw(90f)); Q(PWall, Cxz(x, dz + Cell / 2f, SkirtY), Yaw(-90f)); }
-            for (int i = -1; i < 3; i++) Q(PFound, Cxz(x0 - Cell + (i - 0) * Cell - Cell, dz, DeckY), Quaternion.identity, BuildingGrade.Enum.TopTier);
+            Base(x0 - 1.5f * Cell, dz, 4, 1);
             Q(PSteps, Cxz(x0 - 3.5f * Cell, dz, DeckY), Yaw(180f), BuildingGrade.Enum.TopTier);
             Q(PSteps, Cxz(x0 + Cell / 2f, dz, DeckY), Yaw(0f), BuildingGrade.Enum.TopTier);
         }
@@ -283,7 +310,7 @@ namespace Oxide.Plugins
             if (!site.HasValue) return "Sea fort: " + why;
             c = site.Value; c.y = 0f;
             bid = BuildingManager.server.NewBuildingID();
-            parts.Clear(); jobs.Clear();
+            parts.Clear(); jobs.Clear(); stacked = 0;
             Plan();
             int n = jobs.Count; building = true;
             Step();
@@ -299,7 +326,7 @@ namespace Oxide.Plugins
             data.Ids = parts.Where(e => e != null && e.net != null).Select(e => e.net.ID.Value).ToList();
             data.Centre = new[] { c.x, c.y, c.z };
             Save();
-            Puts($"Sea fort built at {MapHelper.PositionToString(c)} {c:F0}: {parts.Count} pieces, door code {data.Code}, owner Arki.");
+            Puts($"Sea fort built at {MapHelper.PositionToString(c)} {c:F0}: {parts.Count} pieces ({stacked} storeys stacked up from the sea floor), door code {data.Code}, owner Arki.");
             BasePlayer.FindByID(OwnerId)?.ChatMessage($"<color=#39d2d1>ECHO</color> Your sea fort is built at {MapHelper.PositionToString(c)}. Front door code: <color=#ffd27f>{data.Code}</color>");
         }
 
@@ -336,27 +363,6 @@ namespace Oxide.Plugins
                 b.SetGrade(BuildingGrade.Enum.TopTier); b.SetHealthToMax(); b.SendNetworkUpdate(); n++;
             }
             a.ReplyWith($"Sea fort: {n} pieces upgraded to top tier (armoured).");
-        }
-
-        [ConsoleCommand("seafort.skirt")]
-        private void CSkirt(ConsoleSystem.Arg a)
-        {
-            if (!Staff(a) || data.Centre == null || building) return;
-            c = new Vector3(data.Centre[0], 0f, data.Centre[2]); bid = 0;
-            var any = (data.Ids ?? new List<ulong>()).Select(id => BaseNetworkable.serverEntities.Find(new NetworkableId(id)) as BuildingBlock).FirstOrDefault(b => b != null);
-            bid = any != null ? any.buildingID : BuildingManager.server.NewBuildingID();
-            parts.Clear(); jobs.Clear();
-            var towerAngles = new[] { 45f, 135f, 225f, 315f };
-            foreach (var deg in towerAngles) { float r = deg * Mathf.Deg2Rad; Skirt(Mathf.Cos(r) * RingR, Mathf.Sin(r) * RingR, 2); }
-            Skirt(0f, 0f, 8);
-            float start = -(7 * Cell / 2f) - Cell, end = -(RingR - 6f), x0 = Cell / 2f;
-            for (float z = start; z >= end; z -= Cell) { Q(PWall, Cxz(x0 + Cell / 2f, z, SkirtY), Yaw(0f)); Q(PWall, Cxz(x0 - Cell - Cell / 2f, z, SkirtY), Yaw(180f)); }
-            float dz = end - Cell;
-            for (int i = 0; i < 4; i++) { float x = x0 - 3f * Cell + i * Cell; Q(PWall, Cxz(x, dz - Cell / 2f, SkirtY), Yaw(90f)); Q(PWall, Cxz(x, dz + Cell / 2f, SkirtY), Yaw(-90f)); }
-            int n = jobs.Count;
-            while (jobs.Count > 0) { try { jobs.Dequeue()(); } catch { } }
-            data.Ids.AddRange(parts.Where(e => e != null && e.net != null).Select(e => e.net.ID.Value)); Save();
-            a.ReplyWith($"Sea fort: {parts.Count} armoured skirt walls added under the keep, towers, walkway and dock.");
         }
 
         [ConsoleCommand("seafort.remove")]
