@@ -1,5 +1,5 @@
 // EchoAutoAuth 2.1.0 (Nick, 1 Nov 2026): every door (doors, double doors, hatches, garage doors, high external gates) gets a
-//   free code lock the moment it's placed, locked with the owner's own code (same code on all their doors) and opened by
+//   free code lock the moment it's placed (2.1.1: tool cupboards too), locked with the owner's own code (same code on all their doors) and opened by
 //   their clan + team. The code is told once in chat (and again with /mycode).
 // EchoAutoAuth 2.0.0 (Nick, 31 Oct 2026): access follows your CLAN (and team), not individual players.
 //   - Tool cupboards, auto turrets and code locks placed by a player are shared with everyone in their clan and team.
@@ -14,7 +14,7 @@ using Oxide.Core.Plugins;
 
 namespace Oxide.Plugins
 {
-    [Info("EchoAutoAuth", "Echo 10X", "2.1.0")]
+    [Info("EchoAutoAuth", "Echo 10X", "2.1.1")]
     [Description("Clan/team-based access to TCs, turrets and code locks, plus auto code locks.")]
     public class EchoAutoAuth : RustPlugin
     {
@@ -137,7 +137,7 @@ namespace Oxide.Plugins
         }
         private void OnEntityBuilt(Planner plan, UnityEngine.GameObject go)
         {
-            var door = go != null ? go.GetComponent<Door>() : null; var p = plan?.GetOwnerPlayer();
+            var door = go != null ? go.GetComponent<BaseEntity>() : null; if (!(door is Door) && !(door is BuildingPrivlidge)) return; var p = plan?.GetOwnerPlayer();   // 2.1.1: TCs too
             if (door == null || p == null || !((ulong)p.userID).IsSteamId()) return;
             NextTick(() =>
             {
@@ -180,7 +180,7 @@ namespace Oxide.Plugins
         private void CStatus(ConsoleSystem.Arg a)
         {
             if (a.Connection != null && !a.IsAdmin) return;
-            a.ReplyWith($"EchoAutoAuth 2.1.0: on | {doorLocks} door locks auto-placed | watching {ents.OfType<BuildingPrivlidge>().Count()} TCs, {ents.OfType<AutoTurret>().Count()} turrets, {ents.OfType<CodeLock>().Count()} code locks | {data.Added.Sum(k => k.Value.Count)} clan/team auths in place | since load: {added} added, {removed} removed, {codes} code locks auto-set");
+            a.ReplyWith($"EchoAutoAuth 2.1.1: on | {doorLocks} door locks auto-placed | watching {ents.OfType<BuildingPrivlidge>().Count()} TCs, {ents.OfType<AutoTurret>().Count()} turrets, {ents.OfType<CodeLock>().Count()} code locks | {data.Added.Sum(k => k.Value.Count)} clan/team auths in place | since load: {added} added, {removed} removed, {codes} code locks auto-set");
         }
     }
 }
