@@ -1,4 +1,4 @@
-// EchoSeaFort 2.0.0 (Nick, 31 Oct 2026): sea fortress base owned by Arki (Nick) - a normal raidable base.
+// EchoSeaFort 2.1.0: everything top tier (armoured). 2.0.0 (Nick, 31 Oct 2026): sea fortress base owned by Arki (Nick) - a normal raidable base.
 //   - Tall tiered sheet-metal keep: 8x8 -> 6x6 -> 4x4 -> 2x2 tiers (7 storeys, ~25 m), battlements on every step,
 //     four corner turrets on the first roof, spiral stairs all the way up, armoured front door + code lock, stocked TC.
 //   - Double-height stone ring wall standing in the sea, with four 2x2 towers built into the ring (3 storeys).
@@ -14,7 +14,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("EchoSeaFort", "Echo 10X", "2.0.0")]
+    [Info("EchoSeaFort", "Echo 10X", "2.1.0")]
     [Description("Builds the sea fortress base for Arki.")]
     public class EchoSeaFort : RustPlugin
     {
@@ -77,7 +77,7 @@ namespace Oxide.Plugins
         }
 
         // ---------- spawning ----------
-        private BaseEntity Spawn(string prefab, Vector3 pos, Quaternion rot, BuildingGrade.Enum grade = BuildingGrade.Enum.Metal, string fallback = null)
+        private BaseEntity Spawn(string prefab, Vector3 pos, Quaternion rot, BuildingGrade.Enum grade = BuildingGrade.Enum.TopTier, string fallback = null)
         {
             if (!StringPool.toNumber.ContainsKey(prefab)) { if (fallback != null) return Spawn(fallback, pos, rot, grade); PrintWarning("missing prefab " + prefab); return null; }
             var e = GameManager.server.CreateEntity(prefab, pos, rot);
@@ -93,12 +93,12 @@ namespace Oxide.Plugins
             parts.Add(e);
             return e;
         }
-        private void Q(string prefab, Vector3 pos, Quaternion rot, BuildingGrade.Enum grade = BuildingGrade.Enum.Metal, string fallback = null) { if (prefab != null) jobs.Enqueue(() => Spawn(prefab, pos, rot, grade, fallback)); }
+        private void Q(string prefab, Vector3 pos, Quaternion rot, BuildingGrade.Enum grade = BuildingGrade.Enum.TopTier, string fallback = null) { if (prefab != null) jobs.Enqueue(() => Spawn(prefab, pos, rot, grade, fallback)); }
 
         private Vector3 Cxz(float x, float z, float y) => new Vector3(c.x + x, y, c.z + z);
 
         // perimeter of a square tier of n cells (centre-relative cell centres at (i - (n-1)/2) * Cell)
-        private void Perimeter(float ox, float oz, int n, float y, Func<int, string> pick, BuildingGrade.Enum g = BuildingGrade.Enum.Metal)
+        private void Perimeter(float ox, float oz, int n, float y, Func<int, string> pick, BuildingGrade.Enum g = BuildingGrade.Enum.TopTier)
         {
             float off = (n - 1) * Cell / 2f, h = Cell / 2f;
             for (int k = 0; k < n; k++)
@@ -225,16 +225,16 @@ namespace Oxide.Plugins
             float x0 = Cell / 2f;
             for (float z = start; z >= end; z -= Cell)
             {
-                Q(PFound, Cxz(x0, z, DeckY), Quaternion.identity, BuildingGrade.Enum.Stone);
-                Q(PFound, Cxz(x0 - Cell, z, DeckY), Quaternion.identity, BuildingGrade.Enum.Stone);
-                Q(PLow, Cxz(x0 + Cell / 2f, z, DeckY), Yaw(0f), BuildingGrade.Enum.Stone);
-                Q(PLow, Cxz(x0 - Cell - Cell / 2f, z, DeckY), Yaw(180f), BuildingGrade.Enum.Stone);
+                Q(PFound, Cxz(x0, z, DeckY), Quaternion.identity, BuildingGrade.Enum.TopTier);
+                Q(PFound, Cxz(x0 - Cell, z, DeckY), Quaternion.identity, BuildingGrade.Enum.TopTier);
+                Q(PLow, Cxz(x0 + Cell / 2f, z, DeckY), Yaw(0f), BuildingGrade.Enum.TopTier);
+                Q(PLow, Cxz(x0 - Cell - Cell / 2f, z, DeckY), Yaw(180f), BuildingGrade.Enum.TopTier);
             }
             // dock platform 4 wide at the end + steps down to the water on both sides
             float dz = end - Cell;
-            for (int i = -1; i < 3; i++) Q(PFound, Cxz(x0 - Cell + (i - 0) * Cell - Cell, dz, DeckY), Quaternion.identity, BuildingGrade.Enum.Stone);
-            Q(PSteps, Cxz(x0 - 3.5f * Cell, dz, DeckY), Yaw(180f), BuildingGrade.Enum.Stone);
-            Q(PSteps, Cxz(x0 + Cell / 2f, dz, DeckY), Yaw(0f), BuildingGrade.Enum.Stone);
+            for (int i = -1; i < 3; i++) Q(PFound, Cxz(x0 - Cell + (i - 0) * Cell - Cell, dz, DeckY), Quaternion.identity, BuildingGrade.Enum.TopTier);
+            Q(PSteps, Cxz(x0 - 3.5f * Cell, dz, DeckY), Yaw(180f), BuildingGrade.Enum.TopTier);
+            Q(PSteps, Cxz(x0 + Cell / 2f, dz, DeckY), Yaw(0f), BuildingGrade.Enum.TopTier);
         }
 
         private void Door(Vector3 pos, Quaternion rot)
@@ -313,6 +313,20 @@ namespace Oxide.Plugins
             Vector3? at = null;
             if (a.Args != null && a.Args.Length >= 2) { float x, z; if (float.TryParse(a.Args[0], out x) && float.TryParse(a.Args[1], out z)) at = new Vector3(x, 0f, z); }
             a.ReplyWith(Build(at));
+        }
+
+        [ConsoleCommand("seafort.toptier")]
+        private void CTop(ConsoleSystem.Arg a)
+        {
+            if (!Staff(a)) return;
+            int n = 0;
+            foreach (var id in data.Ids ?? new List<ulong>())
+            {
+                var b = BaseNetworkable.serverEntities.Find(new NetworkableId(id)) as BuildingBlock;
+                if (b == null || b.IsDestroyed || b.grade == BuildingGrade.Enum.TopTier) continue;
+                b.SetGrade(BuildingGrade.Enum.TopTier); b.SetHealthToMax(); b.SendNetworkUpdate(); n++;
+            }
+            a.ReplyWith($"Sea fort: {n} pieces upgraded to top tier (armoured).");
         }
 
         [ConsoleCommand("seafort.remove")]
