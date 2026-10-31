@@ -137,7 +137,7 @@ namespace Oxide.Plugins
         }
         private void OnEntityBuilt(Planner plan, UnityEngine.GameObject go)
         {
-            var door = go?.ToBaseEntity() as Door; var p = plan?.GetOwnerPlayer();
+            var door = go != null ? go.GetComponent<Door>() : null; var p = plan?.GetOwnerPlayer();
             if (door == null || p == null || !((ulong)p.userID).IsSteamId()) return;
             NextTick(() =>
             {
