@@ -1,4 +1,9 @@
-// EchoRaidHours 1.0.0 (Nick, 31 Oct 2026): the simple raid system.
+// EchoRaidHours 1.1.0 (Nick, 31 Oct 2026): the WHOLE raid system, simple enough for anyone.
+//   AUTO: protected bases get a blue bubble (green during wipe grace); every bubble drops when raid hours start.
+//   MANUAL: /raidadmin opens a panel with 4 big buttons - AUTO, RAID NOW, PROTECT ALL, FREE FOR ALL
+//           (or /raidadmin auto|raid|protect|ffa). It sets EchoTC's clock, so vending, vitals, animals, NPCs
+//           and the clan $ bounty all follow the same switch.
+// EchoRaidHours 1.0.0: the simple raid system.
 //   - EVERY player base is protected outside raid hours - no registering, no bubbles, no capture bars.
 //   - Raid hours = EchoTC's bounty hours (Wed/Thu 5-10 PM, Sat/Sun 3-11 PM Sydney) and the free-for-all days after it.
 //   - First hour after a wipe: grace, nobody can raid.
@@ -16,7 +21,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("EchoRaidHours", "Echo 10X", "1.0.0")]
+    [Info("EchoRaidHours", "Echo 10X", "1.1.0")]
     [Description("Simple raid hours: every base protected outside raid hours, offline protection inside them.")]
     public class EchoRaidHours : RustPlugin
     {
@@ -33,8 +38,112 @@ namespace Oxide.Plugins
         private int blocked, halved;
         private float loadedAt;
 
-        private void OnServerInitialized() { loadedAt = Time.realtimeSinceStartup; cmd.AddChatCommand("raid", this, nameof(CmdRaid)); cmd.AddChatCommand("raidhours", this, nameof(CmdRaid)); Tick(); timer.Every(5f, Tick); }
-        private void Unload() { foreach (var p in BasePlayer.activePlayerList) CuiHelper.DestroyUi(p, Ui); }
+        private void OnServerInitialized()
+        {
+            loadedAt = Time.realtimeSinceStartup;
+            cmd.AddChatCommand("raid", this, nameof(CmdRaid)); cmd.AddChatCommand("raidhours", this, nameof(CmdRaid)); cmd.AddChatCommand("raidadmin", this, nameof(CmdAdmin));
+            Tick(); timer.Every(5f, Tick); timer.Every(30f, Bubbles); timer.Once(3f, Bubbles);
+        }
+        private void Unload() { foreach (var p in BasePlayer.activePlayerList) { CuiHelper.DestroyUi(p, Ui); CuiHelper.DestroyUi(p, Panel); } KillAllDomes(); }
+
+        // ================= bubbles =================
+        private const string Blue = "assets/bundled/prefabs/modding/events/twitch/br_sphere.prefab";
+        private const string Green = "assets/bundled/prefabs/modding/events/twitch/br_sphere_green.prefab";
+        private class Dome { public List<SphereEntity> Spheres = new List<SphereEntity>(); public Vector3 Centre; public float Radius; public string Prefab; }
+        private readonly Dictionary<ulong, Dome> domes = new Dictionary<ulong, Dome>();
+        private int Layers = 2, MinPieces = 5;
+
+        private void Bubbles()
+        {
+            bool want = state == State.Grace || state == State.Protected;
+            if (!want) { if (domes.Count > 0) KillAllDomes(); return; }
+            string prefab = state == State.Grace ? Green : Blue;
+            var seen = new HashSet<ulong>();
+            foreach (var tc in BaseNetworkable.serverEntities.OfType<BuildingPrivlidge>().ToList())
+            {
+                if (tc == null || tc.IsDestroyed || tc.net == null || tc.OwnerID == 0UL || !tc.OwnerID.IsSteamId()) continue;
+                var b = tc.GetBuilding(); var blocks = b?.buildingBlocks;
+                if (blocks == null || blocks.Count < MinPieces) continue;
+                ulong id = tc.net.ID.Value; seen.Add(id);
+                Vector3 c = Vector3.zero; int n = 0; foreach (var bl in blocks) { if (bl == null) continue; c += bl.transform.position; n++; }
+                if (n == 0) continue; c /= n;
+                float r = 0f; foreach (var bl in blocks) { if (bl == null) continue; var d = bl.transform.position - c; d.y = 0f; r = Mathf.Max(r, d.magnitude); }
+                r = Mathf.Clamp(r + 6f, 12f, 60f);
+                Dome dm;
+                if (domes.TryGetValue(id, out dm) && dm.Prefab == prefab && Mathf.Abs(dm.Radius - r) < 2f && (dm.Centre - c).sqrMagnitude < 4f && dm.Spheres.All(x => x != null && !x.IsDestroyed)) continue;
+                if (dm != null) Kill(dm);
+                dm = new Dome { Centre = c, Radius = r, Prefab = prefab };
+                for (int i = 0; i < Layers; i++)
+                {
+                    var sp = GameManager.server.CreateEntity(prefab, c, Quaternion.identity) as SphereEntity;
+                    if (sp == null) break;
+                    sp.enableSaving = false; sp.currentRadius = r * 2f; sp.lerpRadius = r * 2f; sp.UpdateScale(); sp.Spawn();
+                    dm.Spheres.Add(sp);
+                }
+                domes[id] = dm;
+            }
+            foreach (var k in domes.Keys.Where(k => !seen.Contains(k)).ToList()) { Kill(domes[k]); domes.Remove(k); }
+        }
+        private static void Kill(Dome d) { foreach (var s in d.Spheres) if (s != null && !s.IsDestroyed) s.Kill(); d.Spheres.Clear(); }
+        private void KillAllDomes() { foreach (var d in domes.Values) Kill(d); domes.Clear(); }
+
+        // ================= staff panel =================
+        private const string Panel = "EchoRaidHours.Panel";
+        private string force = "auto";
+        private static bool Staff(BasePlayer p) => p != null && ((p.net?.connection?.authLevel ?? 0) >= 2 || p.IsAdmin);
+
+        private void CmdAdmin(BasePlayer p, string command, string[] args)
+        {
+            if (!Staff(p)) { p.ChatMessage(Tag + "Staff only."); return; }
+            if (args.Length > 0) { p.ChatMessage(Tag + SetMode(args[0], p.displayName)); return; }
+            OpenPanel(p);
+        }
+
+        private string SetMode(string m, string by)
+        {
+            m = (m ?? "").ToLowerInvariant();
+            string tc = m == "auto" ? "auto" : m == "raid" ? "bounty" : m == "protect" ? "peace" : m == "ffa" ? "ffa" : null;
+            if (tc == null) return "Use: auto, raid, protect or ffa";
+            ConsoleSystem.Run(ConsoleSystem.Option.Server.Quiet(), "echotc.force", tc);
+            Puts($"{by} set the raid system to {m.ToUpperInvariant()}");
+            timer.Once(1.5f, () => { Tick(); Bubbles(); foreach (var p in BasePlayer.activePlayerList) if (Staff(p)) RefreshPanel(p); });
+            return m == "auto" ? "AUTO: raid hours follow the schedule again." : m == "raid" ? "RAID NOW: every base can be raided until you switch back to AUTO." : m == "protect" ? "PROTECT ALL: every base is protected until you switch back to AUTO." : "FREE FOR ALL: raid any time until you switch back to AUTO.";
+        }
+
+        private readonly HashSet<ulong> panelOpen = new HashSet<ulong>();
+        private void RefreshPanel(BasePlayer p) { if (panelOpen.Contains(p.userID)) OpenPanel(p); }
+
+        private void OpenPanel(BasePlayer p)
+        {
+            CuiHelper.DestroyUi(p, Panel); panelOpen.Add(p.userID);
+            string now = state == State.Grace ? "WIPE GRACE" : state == State.Raid ? "RAID HOURS LIVE" : state == State.Ffa ? "FREE FOR ALL" : "BASES PROTECTED";
+            string col = state == State.Raid || state == State.Ffa ? "1 0.45 0.4 1" : "0.5 1 0.6 1";
+            string mode = force == "bounty" ? "RAID NOW (manual)" : force == "peace" ? "PROTECT ALL (manual)" : force == "ffa" ? "FREE FOR ALL (manual)" : "AUTO (schedule)";
+            var c = new CuiElementContainer();
+            c.Add(new CuiPanel { Image = { Color = "0.06 0.07 0.09 0.97" }, RectTransform = { AnchorMin = "0.5 0.5", AnchorMax = "0.5 0.5", OffsetMin = "-270 -170", OffsetMax = "270 170" }, CursorEnabled = true }, "Overlay", Panel);
+            c.Add(new CuiLabel { Text = { Text = "RAID SYSTEM", FontSize = 22, Font = "robotocondensed-bold.ttf", Align = TextAnchor.MiddleCenter, Color = "0.22 0.82 0.82 1" }, RectTransform = { AnchorMin = "0 0.84", AnchorMax = "1 0.98" } }, Panel);
+            c.Add(new CuiLabel { Text = { Text = now + (secsLeft > 0 && state != State.Ffa ? "  ·  " + Fmt(secsLeft) + (state == State.Raid ? " left" : " to go") : ""), FontSize = 16, Font = "robotocondensed-bold.ttf", Align = TextAnchor.MiddleCenter, Color = col }, RectTransform = { AnchorMin = "0 0.73", AnchorMax = "1 0.84" } }, Panel);
+            c.Add(new CuiLabel { Text = { Text = $"Mode: {mode}   ·   bubbles up: {domes.Count}", FontSize = 11, Align = TextAnchor.MiddleCenter, Color = "0.75 0.78 0.82 1" }, RectTransform = { AnchorMin = "0 0.66", AnchorMax = "1 0.73" } }, Panel);
+            Btn(c, "AUTO\n<size=10>follow the raid-hours schedule</size>", "raidhours.set auto", "0.2 0.45 0.75 1", "0.04 0.36", "0.49 0.62");
+            Btn(c, "RAID NOW\n<size=10>every base raidable</size>", "raidhours.set raid", "0.72 0.16 0.12 1", "0.51 0.36", "0.96 0.62");
+            Btn(c, "PROTECT ALL\n<size=10>bubbles up on every base</size>", "raidhours.set protect", "0.16 0.55 0.28 1", "0.04 0.08", "0.49 0.34");
+            Btn(c, "FREE FOR ALL\n<size=10>raid any time, no bubbles</size>", "raidhours.set ffa", "0.55 0.25 0.6 1", "0.51 0.08", "0.96 0.34");
+            c.Add(new CuiButton { Button = { Command = "raidhours.close", Color = "0 0 0 0.5" }, Text = { Text = "X", FontSize = 14, Align = TextAnchor.MiddleCenter, Color = "1 1 1 1" }, RectTransform = { AnchorMin = "0.93 0.89", AnchorMax = "0.99 0.98" } }, Panel);
+            CuiHelper.AddUi(p, c);
+        }
+        private void Btn(CuiElementContainer c, string text, string cmd, string color, string min, string max) =>
+            c.Add(new CuiButton { Button = { Command = cmd, Color = color }, Text = { Text = text, FontSize = 16, Font = "robotocondensed-bold.ttf", Align = TextAnchor.MiddleCenter, Color = "1 1 1 1" }, RectTransform = { AnchorMin = min, AnchorMax = max } }, Panel);
+
+        [ConsoleCommand("raidhours.set")]
+        private void CSet(ConsoleSystem.Arg a)
+        {
+            var p = a.Player();
+            if (p != null && !Staff(p)) return;
+            var r = SetMode(a.GetString(0, ""), p != null ? p.displayName : "console");
+            if (p != null) p.ChatMessage(Tag + r); else a.ReplyWith(r);
+        }
+        [ConsoleCommand("raidhours.close")]
+        private void CClose(ConsoleSystem.Arg a) { var p = a.Player(); if (p == null) return; panelOpen.Remove(p.userID); CuiHelper.DestroyUi(p, Panel); }
         private void OnPlayerDisconnected(BasePlayer p) { if (p != null) offlineSince[p.userID] = Time.realtimeSinceStartup; }
         private void OnPlayerConnected(BasePlayer p) { if (p != null) { offlineSince.Remove(p.userID); timer.Once(5f, () => Banner(p)); } }
 
@@ -53,6 +162,7 @@ namespace Oxide.Plugins
                 {
                     bounty = info["bounty"] is bool b && b;
                     hoursText = info.ContainsKey("hoursText") ? info["hoursText"]?.ToString() ?? "" : "";
+                    force = info.ContainsKey("force") ? info["force"]?.ToString() ?? "auto" : "auto";
                     if (info["edge"] is DateTime e && info["now"] is DateTime n && e != DateTime.MaxValue) secsLeft = (e - n).TotalSeconds;
                 }
             }
@@ -67,6 +177,7 @@ namespace Oxide.Plugins
                 else if (state == State.Ffa) Server.Broadcast(Tag + "<color=#ff5a4a>FREE FOR ALL</color> - bases can be raided any time until the wipe.");
             }
             foreach (var p in BasePlayer.activePlayerList) Banner(p);
+            if (prev != state) Bubbles();
         }
 
         private bool Protected => state == State.Grace || state == State.Protected;
@@ -159,7 +270,7 @@ namespace Oxide.Plugins
             if (args.Length > 0 && args[0].ToLowerInvariant() == "show") { uiOff.Remove(p.userID); Banner(p); return; }
             string now = state == State.Grace ? $"WIPE GRACE (raiding opens in {Fmt(secsLeft)})" : state == State.Raid ? "RAID HOURS LIVE" + (secsLeft > 0 ? $" ({Fmt(secsLeft)} left)" : "") : state == State.Ffa ? "FREE FOR ALL" : "BASES PROTECTED" + (secsLeft > 0 ? $" (raids open in {Fmt(secsLeft)})" : "");
             p.ChatMessage(Tag + $"<color=#ffd27f>RAIDING</color>\nRight now: {now}\nRaid hours: {Hours()}\n" +
-                "Outside raid hours every base is protected - no registering needed.\n" +
+                "Outside raid hours every base is protected and shows a blue bubble - no registering needed.\n" +
                 "In raid hours, a base where everyone is offline (10+ min) takes half damage.\n" +
                 "First hour after wipe is grace. Free-for-all after the bounty days: raid any time.\n/raid hide | /raid show - the banner");
         }
@@ -168,7 +279,7 @@ namespace Oxide.Plugins
         private void CStatus(ConsoleSystem.Arg a)
         {
             if (a.Connection != null && !a.IsAdmin) return;
-            a.ReplyWith($"EchoRaidHours 1.0.0: {state}" + (secsLeft > 0 ? $" ({Fmt(secsLeft)})" : "") + $" | hours {Hours()} | since load: {blocked} hits blocked, {halved} offline-halved");
+            a.ReplyWith($"EchoRaidHours 1.1.0: {state} (mode {force}), {domes.Count} bubbles up" + (secsLeft > 0 ? $" ({Fmt(secsLeft)})" : "") + $" | hours {Hours()} | since load: {blocked} hits blocked, {halved} offline-halved");
         }
     }
 }
