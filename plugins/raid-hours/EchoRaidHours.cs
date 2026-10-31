@@ -1,3 +1,5 @@
+// EchoRaidHours 1.5.0 (Nick, 31 Oct): "every clan base is protected, not natty" - only bases of an Echo clan (TC owner or
+//   anyone authed is in a clan) get the bubble and protection. Natty pop (no clan) bases have no protection at any time.
 // EchoRaidHours 1.4.0 (Nick, 31 Oct): CLAN RAIDS START THEMSELVES. In raid hours the first explosive hit on a clan's base
 //   starts a raid: red bubble, 45 min timer, only the attacking group and the defending clan can fight or do damage inside it.
 //   Attackers win by destroying the TC (EchoBountyTeams pays the bounty). Defenders win if the TC survives the timer or raid
@@ -28,8 +30,8 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("EchoRaidHours", "Echo 10X", "1.4.2")]
-    [Description("Simple raid hours: every base protected outside raid hours, offline protection inside them.")]
+    [Info("EchoRaidHours", "Echo 10X", "1.5.0")]
+    [Description("Simple raid hours: clan bases protected outside raid hours, offline protection inside them.")]
     public class EchoRaidHours : RustPlugin
     {
         [PluginReference] private Plugin EchoTC, EchoClans, EchoBountyLake, EchoRaidBase;
@@ -67,6 +69,25 @@ namespace Oxide.Plugins
         private readonly Dictionary<uint, float> rebuildUntil = new Dictionary<uint, float>();
         private bool Cooling(uint b) { float t; return rebuildUntil.TryGetValue(b, out t) && Time.realtimeSinceStartup < t; }
 
+        private readonly Dictionary<uint, KeyValuePair<float, bool>> clanB = new Dictionary<uint, KeyValuePair<float, bool>>();
+        private bool ClanTc(BuildingPrivlidge tc)
+        {
+            if (tc == null) return false;
+            if (!string.IsNullOrEmpty(TagOf(tc.OwnerID))) return true;
+            foreach (var u in tc.authorizedPlayers) if (!string.IsNullOrEmpty(TagOf(u))) return true;
+            return false;
+        }
+        private bool ClanBase(DecayEntity de)
+        {
+            uint b = de.buildingID;
+            if (b == 0) return !string.IsNullOrEmpty(TagOf(de.OwnerID));
+            KeyValuePair<float, bool> hit; float now = Time.realtimeSinceStartup;
+            if (clanB.TryGetValue(b, out hit) && now - hit.Key < 30f) return hit.Value;
+            var tc = de.GetBuildingPrivilege();
+            bool v = tc != null ? ClanTc(tc) : !string.IsNullOrEmpty(TagOf(de.OwnerID));
+            clanB[b] = new KeyValuePair<float, bool>(now, v);
+            return v;
+        }
         private string TagOf(ulong u) { try { return EchoClans?.Call("GetClanTag", u) as string; } catch { return null; } }
         private string GroupOf(BasePlayer p)
         {
@@ -177,6 +198,7 @@ namespace Oxide.Plugins
                 if (blocks == null || blocks.Count < MinPieces) continue;
                 // raid hours: only Bounty Lake bases in their purple hour get a (purple) bubble; protected: blue / green in grace
                 uint bid0 = tc.buildingID;
+                if (!raidByB.ContainsKey(bid0) && !ClanTc(tc)) continue;                     // 1.5.0: no bubble for natty bases
                 string prefab = raidByB.ContainsKey(bid0) ? Red : Cooling(bid0) ? Blue : shield ? (state == State.Grace ? Green : Blue) : (LakePhase(tc.transform.position) == "purple" ? Purple : null);
                 if (prefab == null) continue;
                 ulong id = tc.net.ID.Value; seen.Add(id); if (prefab == Purple) purples++;
@@ -226,7 +248,7 @@ namespace Oxide.Plugins
             ConsoleSystem.Run(ConsoleSystem.Option.Server.Quiet(), "echotc.force", tc);
             Puts($"{by} set the raid system to {m.ToUpperInvariant()}");
             timer.Once(1.5f, () => { Tick(); Bubbles(); foreach (var p in BasePlayer.activePlayerList) if (Staff(p)) RefreshPanel(p); });
-            return m == "auto" ? "AUTO: raid hours follow the schedule again." : m == "raid" ? "RAID NOW: every base can be raided until you switch back to AUTO." : m == "protect" ? "PROTECT ALL: every base is protected until you switch back to AUTO." : "FREE FOR ALL: raid any time until you switch back to AUTO.";
+            return m == "auto" ? "AUTO: raid hours follow the schedule again." : m == "raid" ? "RAID NOW: every base can be raided until you switch back to AUTO." : m == "protect" ? "PROTECT ALL: every clan base is protected until you switch back to AUTO." : "FREE FOR ALL: raid any time until you switch back to AUTO.";
         }
 
         // 1.3.0: the clan's main base (biggest TC any clan member owns or is authed on) - replaces EchoTC's "registered base"
@@ -279,7 +301,7 @@ namespace Oxide.Plugins
             c.Add(new CuiLabel { Text = { Text = $"Mode: {mode}   ·   bubbles up: {domes.Count}", FontSize = 11, Align = TextAnchor.MiddleCenter, Color = "0.75 0.78 0.82 1" }, RectTransform = { AnchorMin = "0 0.66", AnchorMax = "1 0.73" } }, Panel);
             Btn(c, "AUTO\n<size=10>follow the raid-hours schedule</size>", "raidhours.set auto", "0.2 0.45 0.75 1", "0.04 0.36", "0.49 0.62");
             Btn(c, "RAID NOW\n<size=10>every base raidable</size>", "raidhours.set raid", "0.72 0.16 0.12 1", "0.51 0.36", "0.96 0.62");
-            Btn(c, "PROTECT ALL\n<size=10>bubbles up on every base</size>", "raidhours.set protect", "0.16 0.55 0.28 1", "0.04 0.08", "0.49 0.34");
+            Btn(c, "PROTECT ALL\n<size=10>bubbles up on every clan base</size>", "raidhours.set protect", "0.16 0.55 0.28 1", "0.04 0.08", "0.49 0.34");
             Btn(c, "FREE FOR ALL\n<size=10>raid any time, no bubbles</size>", "raidhours.set ffa", "0.55 0.25 0.6 1", "0.51 0.08", "0.96 0.34");
             c.Add(new CuiButton { Button = { Command = "raidhours.close", Color = "0 0 0 0.5" }, Text = { Text = "X", FontSize = 14, Align = TextAnchor.MiddleCenter, Color = "1 1 1 1" }, RectTransform = { AnchorMin = "0.93 0.89", AnchorMax = "0.99 0.98" } }, Panel);
             CuiHelper.AddUi(p, c);
@@ -357,6 +379,7 @@ namespace Oxide.Plugins
             if (atk == null && !fire) return null;                                     // NPCs, heli, environment
             if (atk != null && (atk.IsNpc || !((ulong)atk.userID).IsSteamId())) return null;
             if (atk != null && Friendly(atk, de)) return null;                         // own base / clan / authed
+            if (!ClanBase(de)) return null;                                            // 1.5.0: natty pop bases have no protection
             if (Protected)
             {
                 blocked++;
@@ -450,7 +473,7 @@ namespace Oxide.Plugins
             if (args.Length > 0 && args[0].ToLowerInvariant() == "show") { uiOff.Remove(p.userID); Banner(p); return; }
             string now = state == State.Grace ? $"WIPE GRACE (raiding opens in {Fmt(secsLeft)})" : state == State.Raid ? "RAID HOURS LIVE" + (secsLeft > 0 ? $" ({Fmt(secsLeft)} left)" : "") : state == State.Ffa ? "FREE FOR ALL" : "BASES PROTECTED" + (secsLeft > 0 ? $" (raids open in {Fmt(secsLeft)})" : "");
             p.ChatMessage(Tag + $"<color=#ffd27f>RAIDING</color>\nRight now: {now}\nRaid hours: {Hours()}\n" +
-                "Outside raid hours every base is protected and shows a blue bubble - no registering needed.\n" +
+                "Outside raid hours every CLAN base is protected and shows a blue bubble - no registering needed. Bases without a clan (natty) have no protection at any time - /clan create.\n" +
                 "In raid hours, a clan's first rocket/C4 on another clan's base starts a 45 min raid: red bubble, only those two clans can fight inside. Players without a clan raid the normal way. Destroy the TC to win the bounty; if it survives, the defenders win and get a 30 min rebuild bubble.\n" +
                 "A base where everyone is offline (10+ min) takes half damage.\n" +
                 "First hour after wipe is grace. Free-for-all after the bounty days: raid any time.\n/raid hide | /raid show - the banner");
@@ -461,7 +484,7 @@ namespace Oxide.Plugins
         private void CStatus(ConsoleSystem.Arg a)
         {
             if (a.Connection != null && !a.IsAdmin) return;
-            a.ReplyWith($"EchoRaidHours 1.4.2: {raidByB.Count} raid(s) live | {state} (mode {force}), {domes.Count} bubbles up ({purpleUp} purple, lake {LakePhaseNow()})" + (secsLeft > 0 ? $" ({Fmt(secsLeft)})" : "") + $" | hours {Hours()} | since load: {blocked} hits blocked, {halved} offline-halved");
+            a.ReplyWith($"EchoRaidHours 1.5.0: {raidByB.Count} raid(s) live | {state} (mode {force}), {domes.Count} bubbles up ({purpleUp} purple, lake {LakePhaseNow()})" + (secsLeft > 0 ? $" ({Fmt(secsLeft)})" : "") + $" | hours {Hours()} | since load: {blocked} hits blocked, {halved} offline-halved");
         }
     }
 }
