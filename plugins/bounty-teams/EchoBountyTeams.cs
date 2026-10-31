@@ -29,11 +29,11 @@ using Oxide.Game.Rust.Cui;
 
 namespace Oxide.Plugins
 {
-    [Info("EchoBountyTeams", "Echo 10X", "1.4.0")]
+    [Info("EchoBountyTeams", "Echo 10X", "1.5.0")]
     [Description("Automatic bounty teams: top 10 clans with 10+ players, locked each bounty window, base markers and a raid log.")]
     public class EchoBountyTeams : RustPlugin
     {
-        [PluginReference] private Plugin EchoClans, EchoTC, EchoBountyPrices;
+        [PluginReference] private Plugin EchoClans, EchoTC, EchoBountyPrices, EchoRaidHours;
         private const int MaxTeams = 10, MinTeam = 10;
         // 1.2.0 test weekend: every clan with a registered base is a bounty clan (no 10-player / top-10 rule)
         private const bool TestAllClans = true;
@@ -235,6 +235,9 @@ namespace Oxide.Plugins
         private void OnEntityDeath(BaseCombatEntity e, HitInfo info)
         {
             var tc = e as BuildingPrivlidge; if (tc == null || tc.net == null || !bounty) return;
+            // 1.5.0 (Nick, 31 Oct): in a clan raid (EchoRaidHours) breaking the TC only starts the capture - the bounty is paid
+            // when the attackers fill the capture bar (OnEchoRaidWon below).
+            try { if (EchoRaidHours?.Call("API_RaidOn", tc.buildingID) is bool live && live) return; } catch { }
             // 1.4.0 (Nick, 31 Oct): no more base registration - ANY clan TC (guarding 10+ building pieces) destroyed in raid
             // hours pays out. Registered TCs still count the old way below.
             if (!tcAt.Values.Contains(tc.net.ID.Value))
@@ -260,6 +263,12 @@ namespace Oxide.Plugins
                 tcAt.Remove(kv.Key);
                 markerSnap = "";
             }
+        }
+        private void OnEchoRaidWon(string victim, string winner, string who)
+        {
+            if (string.IsNullOrEmpty(victim)) return;
+            Log($"RAID: [{winner}] CAPTURED [{victim}]'s base ({who})");
+            Payout(victim, winner, who); markerSnap = "";
         }
         // 1.2.0: the money. victim = clan whose TC died, winner = attacking clan (null = no clan, nobody is paid)
         private void Payout(string victim, string winner, string who)
