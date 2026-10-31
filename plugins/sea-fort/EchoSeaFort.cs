@@ -14,7 +14,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("EchoSeaFort", "Echo 10X", "2.1.0")]
+    [Info("EchoSeaFort", "Echo 10X", "2.2.0")]
     [Description("Builds the sea fortress base for Arki.")]
     public class EchoSeaFort : RustPlugin
     {
@@ -123,6 +123,10 @@ namespace Oxide.Plugins
         }
 
         // ---------- plan ----------
+        // 2.2.0: armoured skirt walls under every outer edge, from below the waterline up to the deck, so nothing floats
+        private const float SkirtY = DeckY - LevelH;
+        private void Skirt(float ox, float oz, int n) => Perimeter(ox, oz, n, SkirtY, k => PWall);
+
         private void Plan()
         {
             var towerAngles = new[] { 45f, 135f, 225f, 315f };
@@ -153,6 +157,7 @@ namespace Oxide.Plugins
             const int n = 2, levels = 3;
             float off = (n - 1) * Cell / 2f;
             for (int i = 0; i < n; i++) for (int j = 0; j < n; j++) Q(PFound, Cxz(ox - off + i * Cell, oz - off + j * Cell, DeckY), Quaternion.identity);
+            Skirt(ox, oz, n);
             float sx = ox - off, sz = oz - off;   // stairs cell
             for (int lv = 0; lv < levels; lv++)
             {
@@ -174,6 +179,7 @@ namespace Oxide.Plugins
             float sx = -Cell / 2f, sz = -Cell / 2f;   // stairs cell - inside every tier
             float off8 = 7 * Cell / 2f;
             for (int i = 0; i < 8; i++) for (int j = 0; j < 8; j++) Q(PFound, Cxz(-off8 + i * Cell, -off8 + j * Cell, DeckY), Quaternion.identity);
+            Skirt(0f, 0f, 8);
             int lv = 0;
             for (int t = 0; t < tiers.Length; t++)
             {
@@ -229,9 +235,12 @@ namespace Oxide.Plugins
                 Q(PFound, Cxz(x0 - Cell, z, DeckY), Quaternion.identity, BuildingGrade.Enum.TopTier);
                 Q(PLow, Cxz(x0 + Cell / 2f, z, DeckY), Yaw(0f), BuildingGrade.Enum.TopTier);
                 Q(PLow, Cxz(x0 - Cell - Cell / 2f, z, DeckY), Yaw(180f), BuildingGrade.Enum.TopTier);
+                Q(PWall, Cxz(x0 + Cell / 2f, z, SkirtY), Yaw(0f));
+                Q(PWall, Cxz(x0 - Cell - Cell / 2f, z, SkirtY), Yaw(180f));
             }
             // dock platform 4 wide at the end + steps down to the water on both sides
             float dz = end - Cell;
+            for (int i = 0; i < 4; i++) { float x = x0 - 3f * Cell + i * Cell; Q(PWall, Cxz(x, dz - Cell / 2f, SkirtY), Yaw(90f)); Q(PWall, Cxz(x, dz + Cell / 2f, SkirtY), Yaw(-90f)); }
             for (int i = -1; i < 3; i++) Q(PFound, Cxz(x0 - Cell + (i - 0) * Cell - Cell, dz, DeckY), Quaternion.identity, BuildingGrade.Enum.TopTier);
             Q(PSteps, Cxz(x0 - 3.5f * Cell, dz, DeckY), Yaw(180f), BuildingGrade.Enum.TopTier);
             Q(PSteps, Cxz(x0 + Cell / 2f, dz, DeckY), Yaw(0f), BuildingGrade.Enum.TopTier);
@@ -327,6 +336,27 @@ namespace Oxide.Plugins
                 b.SetGrade(BuildingGrade.Enum.TopTier); b.SetHealthToMax(); b.SendNetworkUpdate(); n++;
             }
             a.ReplyWith($"Sea fort: {n} pieces upgraded to top tier (armoured).");
+        }
+
+        [ConsoleCommand("seafort.skirt")]
+        private void CSkirt(ConsoleSystem.Arg a)
+        {
+            if (!Staff(a) || data.Centre == null || building) return;
+            c = new Vector3(data.Centre[0], 0f, data.Centre[2]); bid = 0;
+            var any = (data.Ids ?? new List<ulong>()).Select(id => BaseNetworkable.serverEntities.Find(new NetworkableId(id)) as BuildingBlock).FirstOrDefault(b => b != null);
+            bid = any != null ? any.buildingID : BuildingManager.server.NewBuildingID();
+            parts.Clear(); jobs.Clear();
+            var towerAngles = new[] { 45f, 135f, 225f, 315f };
+            foreach (var deg in towerAngles) { float r = deg * Mathf.Deg2Rad; Skirt(Mathf.Cos(r) * RingR, Mathf.Sin(r) * RingR, 2); }
+            Skirt(0f, 0f, 8);
+            float start = -(7 * Cell / 2f) - Cell, end = -(RingR - 6f), x0 = Cell / 2f;
+            for (float z = start; z >= end; z -= Cell) { Q(PWall, Cxz(x0 + Cell / 2f, z, SkirtY), Yaw(0f)); Q(PWall, Cxz(x0 - Cell - Cell / 2f, z, SkirtY), Yaw(180f)); }
+            float dz = end - Cell;
+            for (int i = 0; i < 4; i++) { float x = x0 - 3f * Cell + i * Cell; Q(PWall, Cxz(x, dz - Cell / 2f, SkirtY), Yaw(90f)); Q(PWall, Cxz(x, dz + Cell / 2f, SkirtY), Yaw(-90f)); }
+            int n = jobs.Count;
+            while (jobs.Count > 0) { try { jobs.Dequeue()(); } catch { } }
+            data.Ids.AddRange(parts.Where(e => e != null && e.net != null).Select(e => e.net.ID.Value)); Save();
+            a.ReplyWith($"Sea fort: {parts.Count} armoured skirt walls added under the keep, towers, walkway and dock.");
         }
 
         [ConsoleCommand("seafort.remove")]
