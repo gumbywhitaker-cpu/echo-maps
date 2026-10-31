@@ -190,7 +190,7 @@ namespace Oxide.Plugins
         }
         private void Announce()
         {
-            if (data.Teams.Count == 0) { Server.Broadcast(Tag + (TestAllClans ? "BOUNTY HOURS! No clan has a bounty yet - make a clan and register your base. /bountyteams" : "BOUNTY HOURS! No clan qualifies as a bounty team yet: you need 10+ players in your team and a top 10 leaderboard spot. /bountyteams")); return; }
+            if (data.Teams.Count == 0) { Server.Broadcast(Tag + (TestAllClans ? "BOUNTY HOURS! No clan has a bounty yet - make a clan (/clan create) and build a base. /bountyteams" : "BOUNTY HOURS! No clan qualifies as a bounty team yet: you need 10+ players in your team and a top 10 leaderboard spot. /bountyteams")); return; }
             Server.Broadcast(Tag + "BOUNTY HOURS! Every clan base on the map shows its bounty. Destroy a clan's TC and your clan takes <color=#ffd27f>half their money</color> - lose 2 raids and you're out. Got raided? Raid them back to win it back. /bountyteams <size=11>(" + TestNote + ")</size>");
         }
 

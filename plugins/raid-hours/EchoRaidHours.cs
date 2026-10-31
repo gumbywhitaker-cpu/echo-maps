@@ -23,7 +23,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("EchoRaidHours", "Echo 10X", "1.2.1")]
+    [Info("EchoRaidHours", "Echo 10X", "1.3.0")]
     [Description("Simple raid hours: every base protected outside raid hours, offline protection inside them.")]
     public class EchoRaidHours : RustPlugin
     {
@@ -119,6 +119,30 @@ namespace Oxide.Plugins
             Puts($"{by} set the raid system to {m.ToUpperInvariant()}");
             timer.Once(1.5f, () => { Tick(); Bubbles(); foreach (var p in BasePlayer.activePlayerList) if (Staff(p)) RefreshPanel(p); });
             return m == "auto" ? "AUTO: raid hours follow the schedule again." : m == "raid" ? "RAID NOW: every base can be raided until you switch back to AUTO." : m == "protect" ? "PROTECT ALL: every base is protected until you switch back to AUTO." : "FREE FOR ALL: raid any time until you switch back to AUTO.";
+        }
+
+        // 1.3.0: the clan's main base (biggest TC any clan member owns or is authed on) - replaces EchoTC's "registered base"
+        // for the bounty money, map markers and the free-fall nuke. 0 = not in a clan / no base.
+        private readonly Dictionary<string, KeyValuePair<float, ulong>> clanBaseCache = new Dictionary<string, KeyValuePair<float, ulong>>();
+        private object API_ClanBaseTc(ulong uid)
+        {
+            Dictionary<string, object> info = null; try { info = EchoClans?.Call("API_ClanInfo", uid) as Dictionary<string, object>; } catch { }
+            if (info == null || !(info.ContainsKey("inClan") && info["inClan"] is bool && (bool)info["inClan"])) return 0UL;
+            string tag = info.ContainsKey("tag") ? info["tag"]?.ToString() ?? "" : "";
+            KeyValuePair<float, ulong> hit; if (clanBaseCache.TryGetValue(tag, out hit) && Time.realtimeSinceStartup - hit.Key < 20f) return hit.Value;
+            var ids = new HashSet<ulong> { uid };
+            var mem = info.ContainsKey("members") ? info["members"] as System.Collections.IEnumerable : null;
+            if (mem != null) foreach (var m in mem) { var d = m as Dictionary<string, object>; ulong id; if (d != null && d.ContainsKey("id") && d["id"] != null && ulong.TryParse(d["id"].ToString(), out id)) ids.Add(id); }
+            ulong best = 0UL; int bestN = 0;
+            foreach (var tc in BaseNetworkable.serverEntities.OfType<BuildingPrivlidge>())
+            {
+                if (tc == null || tc.IsDestroyed || tc.net == null) continue;
+                if (!ids.Contains(tc.OwnerID) && !tc.authorizedPlayers.Any(ids.Contains)) continue;
+                int n = tc.GetBuilding()?.buildingBlocks?.Count ?? 0;
+                if (n > bestN) { bestN = n; best = tc.net.ID.Value; }
+            }
+            clanBaseCache[tag] = new KeyValuePair<float, ulong>(Time.realtimeSinceStartup, best);
+            return best;
         }
 
         // API for Echo Command's Raid page (one simple page instead of the old Shields + Raid pages)
@@ -300,7 +324,7 @@ namespace Oxide.Plugins
         private void CStatus(ConsoleSystem.Arg a)
         {
             if (a.Connection != null && !a.IsAdmin) return;
-            a.ReplyWith($"EchoRaidHours 1.2.1: {state} (mode {force}), {domes.Count} bubbles up ({purpleUp} purple, lake {LakePhaseNow()})" + (secsLeft > 0 ? $" ({Fmt(secsLeft)})" : "") + $" | hours {Hours()} | since load: {blocked} hits blocked, {halved} offline-halved");
+            a.ReplyWith($"EchoRaidHours 1.3.0: {state} (mode {force}), {domes.Count} bubbles up ({purpleUp} purple, lake {LakePhaseNow()})" + (secsLeft > 0 ? $" ({Fmt(secsLeft)})" : "") + $" | hours {Hours()} | since load: {blocked} hits blocked, {halved} offline-halved");
         }
     }
 }
