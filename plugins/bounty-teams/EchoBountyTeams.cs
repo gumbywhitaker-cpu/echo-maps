@@ -29,7 +29,7 @@ using Oxide.Game.Rust.Cui;
 
 namespace Oxide.Plugins
 {
-    [Info("EchoBountyTeams", "Echo 10X", "1.3.0")]
+    [Info("EchoBountyTeams", "Echo 10X", "1.4.0")]
     [Description("Automatic bounty teams: top 10 clans with 10+ players, locked each bounty window, base markers and a raid log.")]
     public class EchoBountyTeams : RustPlugin
     {
@@ -235,6 +235,21 @@ namespace Oxide.Plugins
         private void OnEntityDeath(BaseCombatEntity e, HitInfo info)
         {
             var tc = e as BuildingPrivlidge; if (tc == null || tc.net == null || !bounty) return;
+            // 1.4.0 (Nick, 31 Oct): no more base registration - ANY clan TC (guarding 10+ building pieces) destroyed in raid
+            // hours pays out. Registered TCs still count the old way below.
+            if (!tcAt.Values.Contains(tc.net.ID.Value))
+            {
+                var vic = tc.OwnerID != 0UL ? ClanTagOf(tc.OwnerID) : null;
+                int size = 0; try { size = tc.GetBuilding()?.buildingBlocks?.Count ?? 0; } catch { }
+                if (!string.IsNullOrEmpty(vic) && size >= 10)
+                {
+                    var a2 = info?.InitiatorPlayer; var who2 = a2 != null ? $"{a2.displayName} [{ClanTagOf(a2.userID) ?? "no clan"}]" : "unknown";
+                    Log($"RAID: [{vic}]'s TC at {Grid(tc.transform.position)} ({size} pieces) was DESTROYED by {who2}");
+                    Payout(vic, a2 != null ? ClanTagOf(a2.userID) : null, who2);
+                    markerSnap = "";
+                }
+                return;
+            }
             foreach (var kv in tcAt.ToList())
             {
                 if (kv.Value != tc.net.ID.Value) continue;

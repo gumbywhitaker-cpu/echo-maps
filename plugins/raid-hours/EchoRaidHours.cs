@@ -1,0 +1,174 @@
+// EchoRaidHours 1.0.0 (Nick, 31 Oct 2026): the simple raid system.
+//   - EVERY player base is protected outside raid hours - no registering, no bubbles, no capture bars.
+//   - Raid hours = EchoTC's bounty hours (Wed/Thu 5-10 PM, Sat/Sun 3-11 PM Sydney) and the free-for-all days after it.
+//   - First hour after a wipe: grace, nobody can raid.
+//   - Offline protection: in raid hours a base whose players have ALL been offline 10+ minutes takes 50% damage.
+//   - Owners, their clan/team and anyone authed on the base's TC can always damage their own stuff (removing, rebuilding).
+//   - Decay, NPCs and animals are never blocked. Player vehicles are not covered.
+//   - A small banner shows the state to everyone; /raid explains it.
+// Console: raidhours.status
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using Oxide.Core.Plugins;
+using Oxide.Game.Rust.Cui;
+using UnityEngine;
+
+namespace Oxide.Plugins
+{
+    [Info("EchoRaidHours", "Echo 10X", "1.0.0")]
+    [Description("Simple raid hours: every base protected outside raid hours, offline protection inside them.")]
+    public class EchoRaidHours : RustPlugin
+    {
+        [PluginReference] private Plugin EchoTC, EchoClans;
+        private const float GraceMinutes = 60f, OfflineMinutes = 10f, OfflineScale = 0.5f;
+        private const string Ui = "EchoRaidHours.Banner";
+        private const string Tag = "<color=#39d2d1>ECHO</color> ";
+
+        private enum State { Grace, Protected, Raid, Ffa }
+        private State state = State.Protected; private double secsLeft = -1; private string hoursText = "";
+        private readonly Dictionary<ulong, float> offlineSince = new Dictionary<ulong, float>();
+        private readonly Dictionary<ulong, float> told = new Dictionary<ulong, float>();
+        private readonly HashSet<ulong> uiOff = new HashSet<ulong>();
+        private int blocked, halved;
+        private float loadedAt;
+
+        private void OnServerInitialized() { loadedAt = Time.realtimeSinceStartup; cmd.AddChatCommand("raid", this, nameof(CmdRaid)); cmd.AddChatCommand("raidhours", this, nameof(CmdRaid)); Tick(); timer.Every(5f, Tick); }
+        private void Unload() { foreach (var p in BasePlayer.activePlayerList) CuiHelper.DestroyUi(p, Ui); }
+        private void OnPlayerDisconnected(BasePlayer p) { if (p != null) offlineSince[p.userID] = Time.realtimeSinceStartup; }
+        private void OnPlayerConnected(BasePlayer p) { if (p != null) { offlineSince.Remove(p.userID); timer.Once(5f, () => Banner(p)); } }
+
+        // ---------- state ----------
+        private void Tick()
+        {
+            var prev = state;
+            double sinceWipe = 1e9;
+            try { sinceWipe = (DateTime.UtcNow - SaveRestore.SaveCreatedTime.ToUniversalTime()).TotalMinutes; } catch { }
+            bool ffa = false, bounty = false; secsLeft = -1;
+            try { ffa = EchoTC?.Call("API_FfaNow") is bool f && f; } catch { }
+            try
+            {
+                var info = EchoTC?.Call("API_BountyInfo") as Dictionary<string, object>;
+                if (info != null)
+                {
+                    bounty = info["bounty"] is bool b && b;
+                    hoursText = info.ContainsKey("hoursText") ? info["hoursText"]?.ToString() ?? "" : "";
+                    if (info["edge"] is DateTime e && info["now"] is DateTime n && e != DateTime.MaxValue) secsLeft = (e - n).TotalSeconds;
+                }
+            }
+            catch { }
+            if (sinceWipe < GraceMinutes) { state = State.Grace; secsLeft = (GraceMinutes - sinceWipe) * 60.0; }
+            else if (ffa) state = State.Ffa;
+            else state = bounty ? State.Raid : State.Protected;
+            if (prev != state)
+            {
+                if (state == State.Raid) Server.Broadcast(Tag + "<color=#ff5a4a>RAID HOURS ARE LIVE</color> - every base can be raided now. Bases where everyone is offline take half damage.");
+                else if (state == State.Protected && prev == State.Raid) Server.Broadcast(Tag + "<color=#7CFC9A>Raid hours are over</color> - all bases are protected again. /raid for the times.");
+                else if (state == State.Ffa) Server.Broadcast(Tag + "<color=#ff5a4a>FREE FOR ALL</color> - bases can be raided any time until the wipe.");
+            }
+            foreach (var p in BasePlayer.activePlayerList) Banner(p);
+        }
+
+        private bool Protected => state == State.Grace || state == State.Protected;
+
+        // ---------- damage ----------
+        private object OnEntityTakeDamage(BaseCombatEntity ent, HitInfo info)
+        {
+            if (ent == null || info == null || ent is BasePlayer || ent is BaseNpc) return null;
+            var de = ent as DecayEntity; if (de == null) return null;
+            if (de.OwnerID == 0UL || !de.OwnerID.IsSteamId()) return null;          // map / event stuff
+            if (info.damageTypes.Has(Rust.DamageType.Decay)) return null;
+            var atk = info.InitiatorPlayer;
+            bool fire = info.damageTypes.Get(Rust.DamageType.Heat) > 0f;
+            if (atk == null && !fire) return null;                                     // NPCs, heli, environment
+            if (atk != null && (atk.IsNpc || !((ulong)atk.userID).IsSteamId())) return null;
+            if (atk != null && Friendly(atk, de)) return null;                         // own base / clan / authed
+            if (Protected)
+            {
+                blocked++;
+                if (atk != null) Tell(atk);
+                return true;
+            }
+            if (state == State.Raid && AllOffline(de)) { info.damageTypes.ScaleAll(OfflineScale); halved++; }
+            return null;
+        }
+
+        private bool Friendly(BasePlayer atk, DecayEntity de)
+        {
+            ulong a = atk.userID, o = de.OwnerID;
+            if (a == o) return true;
+            if (atk.currentTeam != 0 && RelationshipManager.ServerInstance?.FindPlayersTeam(o)?.teamID == atk.currentTeam) return true;
+            try { if (EchoClans?.Call("IsMember", a, o) is bool m && m) return true; } catch { }
+            var tc = de.GetBuildingPrivilege();
+            return tc != null && tc.IsAuthed(atk);
+        }
+
+        private bool AllOffline(DecayEntity de)
+        {
+            var tc = de.GetBuildingPrivilege();
+            IEnumerable<ulong> who = tc != null ? tc.authorizedPlayers : new HashSet<ulong> { de.OwnerID };
+            float now = Time.realtimeSinceStartup;
+            foreach (var id in who)
+            {
+                var p = BasePlayer.FindByID(id);
+                if (p != null && p.IsConnected) return false;
+                float since; if (!offlineSince.TryGetValue(id, out since)) since = loadedAt - OfflineMinutes * 60f;   // offline since before load
+                if (now - since < OfflineMinutes * 60f) return false;
+            }
+            return true;
+        }
+
+        private void Tell(BasePlayer p)
+        {
+            float t; if (told.TryGetValue(p.userID, out t) && Time.realtimeSinceStartup - t < 10f) return;
+            told[p.userID] = Time.realtimeSinceStartup;
+            p.ChatMessage(Tag + (state == State.Grace ? $"Wipe grace - no raiding for another {Fmt(secsLeft)}." : $"Bases are protected right now. Raid hours: {Hours()}. /raid"));
+        }
+
+        // ---------- banner + /raid ----------
+        private string Hours() => string.IsNullOrEmpty(hoursText) ? "Wed & Thu 5-10 PM, Sat & Sun 3-11 PM (Sydney)" : hoursText;
+        private static string Fmt(double s)
+        {
+            if (s < 0) return "";
+            var t = TimeSpan.FromSeconds(s);
+            return t.TotalHours >= 24 ? $"{(int)t.TotalDays}d {t.Hours}h" : t.TotalHours >= 1 ? $"{(int)t.TotalHours}h {t.Minutes:00}m" : $"{t.Minutes}m {t.Seconds:00}s";
+        }
+
+        private void Banner(BasePlayer p)
+        {
+            if (p == null || !p.IsConnected) return;
+            CuiHelper.DestroyUi(p, Ui);
+            if (uiOff.Contains(p.userID)) return;
+            string text, col;
+            switch (state)
+            {
+                case State.Grace: text = $"WIPE GRACE  ·  raiding opens in {Fmt(secsLeft)}"; col = "0.15 0.45 0.75 0.80"; break;
+                case State.Raid: text = "RAID HOURS LIVE" + (secsLeft > 0 ? $"  ·  {Fmt(secsLeft)} left" : ""); col = "0.70 0.12 0.10 0.85"; break;
+                case State.Ffa: text = "FREE FOR ALL  ·  raid any time"; col = "0.70 0.12 0.10 0.85"; break;
+                default: text = "BASES PROTECTED" + (secsLeft > 0 ? $"  ·  raids open in {Fmt(secsLeft)}" : ""); col = "0.12 0.50 0.25 0.80"; break;
+            }
+            var c = new CuiElementContainer();
+            c.Add(new CuiPanel { Image = { Color = col }, RectTransform = { AnchorMin = "0.40 0.965", AnchorMax = "0.60 0.988" } }, "Hud", Ui);
+            c.Add(new CuiLabel { Text = { Text = text, FontSize = 11, Align = TextAnchor.MiddleCenter, Color = "1 1 1 1" }, RectTransform = { AnchorMin = "0 0", AnchorMax = "1 1" } }, Ui);
+            CuiHelper.AddUi(p, c);
+        }
+
+        private void CmdRaid(BasePlayer p, string command, string[] args)
+        {
+            if (args.Length > 0 && args[0].ToLowerInvariant() == "hide") { uiOff.Add(p.userID); CuiHelper.DestroyUi(p, Ui); p.ChatMessage(Tag + "Raid banner hidden. /raid show brings it back."); return; }
+            if (args.Length > 0 && args[0].ToLowerInvariant() == "show") { uiOff.Remove(p.userID); Banner(p); return; }
+            string now = state == State.Grace ? $"WIPE GRACE (raiding opens in {Fmt(secsLeft)})" : state == State.Raid ? "RAID HOURS LIVE" + (secsLeft > 0 ? $" ({Fmt(secsLeft)} left)" : "") : state == State.Ffa ? "FREE FOR ALL" : "BASES PROTECTED" + (secsLeft > 0 ? $" (raids open in {Fmt(secsLeft)})" : "");
+            p.ChatMessage(Tag + $"<color=#ffd27f>RAIDING</color>\nRight now: {now}\nRaid hours: {Hours()}\n" +
+                "Outside raid hours every base is protected - no registering needed.\n" +
+                "In raid hours, a base where everyone is offline (10+ min) takes half damage.\n" +
+                "First hour after wipe is grace. Free-for-all after the bounty days: raid any time.\n/raid hide | /raid show - the banner");
+        }
+
+        [ConsoleCommand("raidhours.status")]
+        private void CStatus(ConsoleSystem.Arg a)
+        {
+            if (a.Connection != null && !a.IsAdmin) return;
+            a.ReplyWith($"EchoRaidHours 1.0.0: {state}" + (secsLeft > 0 ? $" ({Fmt(secsLeft)})" : "") + $" | hours {Hours()} | since load: {blocked} hits blocked, {halved} offline-halved");
+        }
+    }
+}
