@@ -72,20 +72,28 @@ window.__build = function (MODS, PACK, VER, DESC) {
   if (cfgMods.length && !hooks.Init) hooks.Init = [];
   const main = [];
   for (const [hn, lst] of Object.entries(hooks)) {
-    let params = lst.reduce((a, x) => x[2].length > a.length ? x[2] : a, '');
+    // per argument position: one shared type if every module agrees, otherwise 'object' (each module gets an 'is' guard)
+    const plist = lst.map(x => x[2] ? x[2].split(',').map(y => { const t = y.split('=')[0].trim().split(/\s+/); return [t[0], t[t.length - 1]]; }) : []);
+    const maxN = Math.max(0, ...plist.map(p => p.length));
+    const mtypes = [], mnames = [];
+    for (let k = 0; k < maxN; k++) {
+      const ts = [...new Set(plist.filter(p => p.length > k).map(p => p[k][0]))];
+      if (ts.length === 1) { mtypes.push(ts[0]); mnames.push(plist.find(p => p.length > k)[k][1]); }
+      else { mtypes.push('object'); mnames.push('a' + k); }
+    }
+    let params = mtypes.map((t, k) => t + ' ' + mnames[k]).join(', ');
     const nonVoid = lst.some(x => x[1] !== 'void');
     const ret = !nonVoid ? 'void' : 'object';
-    const mnames = params ? params.split(',').map(x => x.split('=')[0].trim().split(/\s+/).pop()) : [];
-    const mtypes = params ? params.split(',').map(x => x.trim().split(/\s+/)[0]) : [];
     const lines = [];
     if (hn === 'Init') for (const cmn of cfgMods) lines.push(`        Safe("${cmn}", "LoadConfig", () => m_${cmn}.LoadConfig());`);
     for (const [name, r, p] of lst) {
       let call, guard = 'true';
-      if (p && p !== params) {
-        const pt = p.split(',').map(x => x.trim().split(/\s+/)[0]); const conv = [];
-        pt.forEach((t, i) => { conv.push(t === mtypes[i] ? mnames[i] : `(${mnames[i]} as ${t})`); if (t !== mtypes[i]) guard += ` && ${mnames[i]} is ${t}`; });
+      const pt = p ? p.split(',').map(x => x.trim().split(/\s+/)[0]) : [];
+      if (pt.some((t, i) => t !== mtypes[i])) {
+        const conv = [];
+        pt.forEach((t, i) => { conv.push(t === mtypes[i] ? mnames[i] : `((${t})${mnames[i]})`); if (t !== mtypes[i]) guard += ` && ${mnames[i]} is ${t}`; });
         call = `m_${name}.${hn}(${conv.join(', ')})`;
-      } else call = `m_${name}.${hn}(${p ? argnames(p) : ''})`;
+      } else call = `m_${name}.${hn}(${mnames.slice(0, pt.length).join(', ')})`;
       const sub = `!m_${name}.Unsub.Contains("${hn}")`;
       if (r !== 'void' && ret === 'object') lines.push(`        if (${sub} && ${guard}) { var r_${name} = SafeO("${name}", "${hn}", () => (object)${call}); if (r_${name} != null) return r_${name}; }`);
       else lines.push(`        if (${sub} && ${guard}) Safe("${name}", "${hn}", () => ${call});`);
