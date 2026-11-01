@@ -1,8 +1,6 @@
 // EchoEssentials 1.0.0 (Nick, 1 Nov 2026): 14 small Echo plugins folded into one. Each one's code is unchanged and runs as
 //   its own module below; data files, chat and console commands are exactly the same as before:
 //   EchoAutoDoor, EchoSamSafe, EchoUnstuck, EchoNoDeadLogs, EchoSignRefresh, EchoPop, EchoBagTimers, EchoRocketDamage, EchoNoGod, EchoRadioLock, EchoCraftGuard, EchoCleanup, EchoAutoAuth, EchoRoamsNoBuild
-using ConVar;
-using Oxide.Core.Libraries;
 using Oxide.Core.Plugins;
 using Oxide.Core;
 using System.Collections.Generic;
@@ -53,7 +51,7 @@ namespace Oxide.Plugins
     internal Plugin Find(string n) => plugins.Find(n);
     internal void AddChat(string c, Action<BasePlayer, string, string[]> cb) => cmd.AddChatCommand(c, this, cb);
     internal PluginTimers Timers => timer;
-    internal Permission Perm => permission;
+    internal Oxide.Core.Libraries.Permission Perm => permission;
     internal void Log(string mod, string m) => Puts("[" + mod + "] " + m);
     internal void Warn(string mod, string m) => PrintWarning("[" + mod + "] " + m);
     internal void Err(string mod, string m) => PrintError("[" + mod + "] " + m);
@@ -67,7 +65,7 @@ namespace Oxide.Plugins
         internal EchoEssentials EP;
         internal abstract string ModName { get; }
         internal PluginTimers timer => EP.Timers;
-        internal Permission permission => EP.Perm;
+        internal Oxide.Core.Libraries.Permission permission => EP.Perm;
         internal string Name => ModName;
         internal void Puts(string m) => EP.Log(ModName, m);
         internal void Puts(string f, params object[] a) => EP.Log(ModName, string.Format(f, a));
@@ -125,7 +123,7 @@ namespace Oxide.Plugins
         Safe("EchoRadioLock", "OnEntitySpawned", () => m_EchoRadioLock.OnEntitySpawned(n));
         Safe("EchoAutoAuth", "OnEntitySpawned", () => m_EchoAutoAuth.OnEntitySpawned(n));
     }
-    private void OnPlayerChat(BasePlayer p, string message, Chat.ChatChannel channel)
+    private void OnPlayerChat(BasePlayer p, string message, ConVar.Chat.ChatChannel channel)
     {
         Safe("EchoPop", "OnPlayerChat", () => m_EchoPop.OnPlayerChat(p, message, channel));
     }
@@ -434,7 +432,7 @@ namespace Oxide.Plugins
 
         internal void CmdPop(BasePlayer p, string command, string[] args) => p?.ChatMessage(Text());
 
-        internal void OnPlayerChat(BasePlayer p, string message, Chat.ChatChannel channel)
+        internal void OnPlayerChat(BasePlayer p, string message, ConVar.Chat.ChatChannel channel)
         {
             if (p == null || string.IsNullOrEmpty(message)) return;
             var m = message.Trim().ToLowerInvariant();
