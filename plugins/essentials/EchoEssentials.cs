@@ -33,20 +33,20 @@ namespace Oxide.Plugins
 
     public EchoEssentials()
     {
-        m_EchoAutoDoor.P = this;
-        m_EchoSamSafe.P = this;
-        m_EchoUnstuck.P = this;
-        m_EchoNoDeadLogs.P = this;
-        m_EchoSignRefresh.P = this;
-        m_EchoPop.P = this;
-        m_EchoBagTimers.P = this;
-        m_EchoRocketDamage.P = this;
-        m_EchoNoGod.P = this;
-        m_EchoRadioLock.P = this;
-        m_EchoCraftGuard.P = this;
-        m_EchoCleanup.P = this;
-        m_EchoAutoAuth.P = this;
-        m_EchoRoamsNoBuild.P = this;
+        m_EchoAutoDoor.EP = this;
+        m_EchoSamSafe.EP = this;
+        m_EchoUnstuck.EP = this;
+        m_EchoNoDeadLogs.EP = this;
+        m_EchoSignRefresh.EP = this;
+        m_EchoPop.EP = this;
+        m_EchoBagTimers.EP = this;
+        m_EchoRocketDamage.EP = this;
+        m_EchoNoGod.EP = this;
+        m_EchoRadioLock.EP = this;
+        m_EchoCraftGuard.EP = this;
+        m_EchoCleanup.EP = this;
+        m_EchoAutoAuth.EP = this;
+        m_EchoRoamsNoBuild.EP = this;
     }
 
     // ---- shared plumbing for the modules ----
@@ -64,17 +64,17 @@ namespace Oxide.Plugins
 
     internal abstract class EchoMod
     {
-        internal EchoEssentials P;
+        internal EchoEssentials EP;
         internal abstract string ModName { get; }
-        internal PluginTimers timer => P.Timers;
-        internal Permission permission => P.Perm;
+        internal PluginTimers timer => EP.Timers;
+        internal Permission permission => EP.Perm;
         internal string Name => ModName;
-        internal void Puts(string m) => P.Log(ModName, m);
-        internal void Puts(string f, params object[] a) => P.Log(ModName, string.Format(f, a));
-        internal void PrintWarning(string m) => P.Warn(ModName, m);
-        internal void PrintError(string m) => P.Err(ModName, m);
-        internal void NextTick(Action a) => P.NT(a);
-        internal void LogToFile(string f, string m, Plugin p) => P.LogFile(f, m, p);
+        internal void Puts(string m) => EP.Log(ModName, m);
+        internal void Puts(string f, params object[] a) => EP.Log(ModName, string.Format(f, a));
+        internal void PrintWarning(string m) => EP.Warn(ModName, m);
+        internal void PrintError(string m) => EP.Err(ModName, m);
+        internal void NextTick(Action a) => EP.NT(a);
+        internal void LogToFile(string f, string m, Plugin p) => EP.LogFile(f, m, p);
     }
 
     // ---- hooks: each one is handed to every module that uses it ----
@@ -245,7 +245,7 @@ namespace Oxide.Plugins
         internal int closed; internal bool dirty;
 
         internal void Init() { prefs = Interface.Oxide.DataFileSystem.ReadObject<Dictionary<ulong, Pref>>("EchoAutoDoor") ?? new Dictionary<ulong, Pref>(); }
-        internal void OnServerInitialized() { P.AddChat("ad", CmdAd); P.AddChat("autodoor", CmdAd); timer.Every(120f, Save); }
+        internal void OnServerInitialized() { EP.AddChat("ad", CmdAd); EP.AddChat("autodoor", CmdAd); timer.Every(120f, Save); }
         internal void Unload() { foreach (var t in pending.Values) t?.Destroy(); pending.Clear(); Save(); }
         internal void Save() { if (!dirty) return; dirty = false; Interface.Oxide.DataFileSystem.WriteObject("EchoAutoDoor", prefs); }
 
@@ -323,13 +323,13 @@ namespace Oxide.Plugins
     {
         internal override string ModName => "EchoUnstuck";
 
-        internal Plugin NoEscape => P.Find("NoEscape");
+        internal Plugin NoEscape => EP.Find("NoEscape");
         internal const string Tag = "<color=#39d2d1>ECHO</color> ";
         internal readonly Dictionary<ulong, float> last = new Dictionary<ulong, float>();
         internal int used;
         internal static readonly int Block = Rust.Layers.Mask.Default | Rust.Layers.Mask.World | Rust.Layers.Mask.Construction | Rust.Layers.Mask.Deployed | Rust.Layers.Mask.Tree | Rust.Layers.Mask.Terrain;
 
-        internal void OnServerInitialized() { P.AddChat("stuck", CmdStuck); P.AddChat("unstuck", CmdStuck); }
+        internal void OnServerInitialized() { EP.AddChat("stuck", CmdStuck); EP.AddChat("unstuck", CmdStuck); }
 
         internal void CmdStuck(BasePlayer p, string command, string[] args)
         {
@@ -421,7 +421,7 @@ namespace Oxide.Plugins
 
         internal float last;
 
-        internal void OnServerInitialized() { P.AddChat("pop", CmdPop); P.AddChat("online", CmdPop); }
+        internal void OnServerInitialized() { EP.AddChat("pop", CmdPop); EP.AddChat("online", CmdPop); }
 
         internal string Text()
         {
@@ -528,7 +528,7 @@ namespace Oxide.Plugins
                 p.ChatMessage("<color=#39d2d1>ECHO</color> God mode is for server owners only - it's been switched off.");
                 var msg = $"GOD MODE blocked: {p.displayName} ({p.UserIDString}) at {MapHelper.PositionToString(p.transform.position)} - admin flag removed until they rejoin (time #{n}).";
                 Puts(msg);
-                LogToFile("EchoNoGod", DateTime.UtcNow.ToString("u") + " " + msg, P);
+                LogToFile("EchoNoGod", DateTime.UtcNow.ToString("u") + " " + msg, EP);
                 foreach (var a in BasePlayer.activePlayerList) if (a != null && a != p && Allowed(a)) a.ChatMessage("<color=#ff9a3c>[NO GOD]</color> " + msg);
             }
         }
@@ -701,7 +701,7 @@ namespace Oxide.Plugins
         internal void Staff(string msg)
         {
             Puts(msg);
-            LogToFile("EchoCraftGuard", DateTime.UtcNow.ToString("u") + " " + msg, P);
+            LogToFile("EchoCraftGuard", DateTime.UtcNow.ToString("u") + " " + msg, EP);
             foreach (var a in BasePlayer.activePlayerList) if (a != null && a.IsAdmin) a.ChatMessage("<color=#ff9a3c>[CRAFT GUARD]</color> " + msg);
         }
 
@@ -730,7 +730,7 @@ namespace Oxide.Plugins
     {
         internal override string ModName => "EchoCleanup";
 
-        internal Plugin EchoTC => P.Find("EchoTC"); internal Plugin EchoRaidHours => P.Find("EchoRaidHours");
+        internal Plugin EchoTC => EP.Find("EchoTC"); internal Plugin EchoRaidHours => EP.Find("EchoRaidHours");
         internal bool? lastBounty;
         internal readonly Queue<BaseNetworkable> killQ = new Queue<BaseNetworkable>();
         internal string lastReport = "not run yet";
@@ -834,7 +834,7 @@ namespace Oxide.Plugins
     {
         internal override string ModName => "EchoAutoAuth";
 
-        internal Plugin EchoClans => P.Find("EchoClans");
+        internal Plugin EchoClans => EP.Find("EchoClans");
         internal class Store { public Dictionary<ulong, HashSet<ulong>> Added = new Dictionary<ulong, HashSet<ulong>>(); public Dictionary<ulong, string> Codes = new Dictionary<ulong, string>(); } // entity net id -> players we added
         internal Store data;
         internal readonly HashSet<BaseEntity> ents = new HashSet<BaseEntity>();
@@ -846,7 +846,7 @@ namespace Oxide.Plugins
             foreach (var n in BaseNetworkable.serverEntities) Track(n as BaseEntity);
             timer.Every(30f, SyncAll); timer.Every(60f, Save); Queue();
             if (data.Codes == null) data.Codes = new Dictionary<ulong, string>();
-            P.AddChat("mycode", CmdMyCode);
+            EP.AddChat("mycode", CmdMyCode);
         }
         internal void Unload() => Save();
         internal void OnNewSave(string f) { data = new Store(); dirty = true; Save(); }
@@ -1004,7 +1004,7 @@ namespace Oxide.Plugins
     {
         internal override string ModName => "EchoRoamsNoBuild";
 
-        internal Plugin EchoRoams => P.Find("EchoRoams"); internal Plugin EchoClans => P.Find("EchoClans"); internal Plugin NoEscape => P.Find("NoEscape");
+        internal Plugin EchoRoams => EP.Find("EchoRoams"); internal Plugin EchoClans => EP.Find("EchoClans"); internal Plugin NoEscape => EP.Find("NoEscape");
         internal const float Radius = 160f;   // EchoRoams island radius is 150 m; a little extra so nobody builds on the edge
         internal const float TpCooldown = 60f;
         internal const string Tag = "<color=#39d2d1>ECHO</color> ";
@@ -1021,7 +1021,7 @@ namespace Oxide.Plugins
             "flamethrower", "catapult.ammo.explosive", "ammo.rifle.explosive"
         };
 
-        internal void OnServerInitialized() { Refresh(); timer.Every(60f, Refresh); P.AddChat("roamst", CmdRoamsT); }
+        internal void OnServerInitialized() { Refresh(); timer.Every(60f, Refresh); EP.AddChat("roamst", CmdRoamsT); }
         internal void OnPluginLoaded(Plugin p) { if (p != null && p.Name == "EchoRoams") timer.Once(5f, Refresh); }
         internal void Refresh()
         {
